@@ -2623,12 +2623,17 @@ class AppleseedRenderer final : public AppleseedRendererBase
 				{
 					if( value == nullptr )
 					{
-						m_project->search_paths().reset();
+                        //m_project->search_paths().reset();
+						m_project->search_paths().clear_explicit_paths();
 					}
 					else if( const StringData *d = reportedCast<const StringData>( value, "option", name ) )
 					{
-						m_project->search_paths().reset();
-						m_project->search_paths().split_and_push_back(d->readable().c_str(), ':');
+						m_project->search_paths().clear_explicit_paths();
+						//m_project->search_paths().split_and_push_back(d->readable().c_str(), ':');
+                        vector<string> paths;
+                        boost::split(paths, d->readable(), boost::is_any_of("\t"));
+                        for (auto& path : paths)
+                            m_project->search_paths().push_back_explicit_path(path.c_str());
 					}
 					return;
 				}
