@@ -1,4 +1,4 @@
-##########################################################################
+#########################################################################
 #
 #  Copyright (c) 2011-2014, John Haddon. All rights reserved.
 #  Copyright (c) 2011-2014, Image Engine Design Inc. All rights reserved.
@@ -222,6 +222,12 @@ options.Add(
 )
 
 options.Add(
+    "OPENEXR_ROOT",
+    "The root path of OpenEXR",
+    "/usr/local",
+)
+
+options.Add(
 	"OPENEXR_LIB_SUFFIX",
 	"The suffix used when locating the OpenEXR libraries.",
 	"",
@@ -273,6 +279,12 @@ options.Add(
 	"VDB_LIB_SUFFIX",
 	"The suffix used when locating the OpenVDB libraries.",
 	"",
+)
+
+options.Add(
+    "FREETYPE_ROOT",
+    "The root path of freetype.",
+    "/usr",
 )
 
 # general variables
@@ -352,11 +364,14 @@ env = Environment(
 # this should turn off warnings from those headers, allowing us to
 # build with -Werror. there are so many warnings from boost
 # in particular that this would be otherwise impossible.
+import sysconfig
 for path in [
 		"$BUILD_DIR/include",
-		"$BUILD_DIR/include/python$PYTHON_VERSION",
-		"$BUILD_DIR/include/OpenEXR",
+		#"$BUILD_DIR/include/python$PYTHON_VERSION",
+		#"$BUILD_DIR/include/OpenEXR",
 		"$BUILD_DIR/include/GL",
+        sysconfig.get_paths()['include'],
+        "$OPENEXR_ROOT/include/OpenEXR",
 	] + env["LOCATE_DEPENDENCY_SYSTEMPATH"] :
 
 	env.Append(
@@ -585,7 +600,7 @@ basePythonEnv.Append(
 	],
 
 	LIBS = [
-		"boost_python$BOOST_LIB_SUFFIX",
+		"boost_python27$BOOST_LIB_SUFFIX",
 		"IECorePython$CORTEX_PYTHON_LIB_SUFFIX",
 		"Gaffer",
 	],
@@ -723,7 +738,8 @@ libraries = {
 
 	"GafferImage" : {
 		"envAppends" : {
-			"CPPPATH" : [ "$BUILD_DIR/include/freetype2" ],
+			#"CPPPATH" : [ "$BUILD_DIR/include/freetype2" ],
+            "CPPPATH" : [ "$FREETYPE_ROOT/include/freetype2" ],
 			"LIBS" : [ "Gaffer", "GafferDispatch", "Iex$OPENEXR_LIB_SUFFIX", "IECoreImage$CORTEX_LIB_SUFFIX", "OpenImageIO$OIIO_LIB_SUFFIX", "OpenColorIO$OCIO_LIB_SUFFIX", "freetype" ],
 		},
 		"pythonEnvAppends" : {
