@@ -222,15 +222,9 @@ options.Add(
 )
 
 options.Add(
-	"ILMBASE_ROOT",
-	"The root path of ilmbase",
-	"/usr/local",
-)
-
-options.Add(
-	"OPENEXR_ROOT",
-	"The root path of OpenEXR",
-	"/usr/local",
+    "OPENEXR_ROOT",
+    "The root path of OpenEXR",
+    "/usr/local",
 )
 
 options.Add(
@@ -240,63 +234,15 @@ options.Add(
 )
 
 options.Add(
-	"ALEMBIC_ROOT",
-	"The root path of alembic",
-	"/usr/local",
-)
-
-options.Add(
-	"USD_ROOT",
-	"The root path of usd",
-	"/usr/local",
-)
-
-options.Add(
-	"BOOST_ROOT",
-	"The root path of boost",
-	"/usr/local",
-)
-
-options.Add(
 	"BOOST_LIB_SUFFIX",
 	"The suffix used when locating the boost libraries.",
 	"",
 )
 
 options.Add(
-	"GLEW_ROOT",
-	"The root path of glew",
-	"/usr",
-)
-
-options.Add(
 	"GLEW_LIB_SUFFIX",
 	"The suffix used when locating the glew libraries.",
 	"",
-)
-
-options.Add(
-	"QT_ROOT",
-	"The root path of Qt",
-	"/usr/local",
-)
-
-options.Add(
-	"XERCES_ROOT",
-	"The root path of xerces-c",
-	"/usr/local",
-)
-
-options.Add(
-	"TBB_ROOT",
-	"The root path of tbb",
-	"/usr",
-)
-
-options.Add(
-	"CORTEX_ROOT",
-	"The root path of cortex",
-	"/usr/local",
 )
 
 options.Add(
@@ -312,21 +258,9 @@ options.Add(
 )
 
 options.Add(
-	"OIIO_ROOT",
-	"The root path of oiio",
-	"/usr/local",
-)
-
-options.Add(
 	"OIIO_LIB_SUFFIX",
 	"The suffix used when locating the OpenImageIO libraries.",
 	"",
-)
-
-options.Add(
-	"OCIO_ROOT",
-	"The root path of ocio",
-	"/usr/local",
 )
 
 options.Add(
@@ -336,21 +270,9 @@ options.Add(
 )
 
 options.Add(
-	"OSL_ROOT",
-	"The root path of osl",
-	"/usr/local",
-)
-
-options.Add(
 	"OSL_LIB_SUFFIX",
 	"The suffix used when locating the OpenShadingLanguage libraries.",
 	"",
-)
-
-options.Add(
-	"VDB_ROOT",
-	"The root path of openvdb",
-	"/usr/local",
 )
 
 options.Add(
@@ -360,21 +282,9 @@ options.Add(
 )
 
 options.Add(
-	"FREETYPE_ROOT",
-	"The root path of freetype.",
-	"/usr",
-)
-
-options.Add(
-	"BLOSC_ROOT",
-	"The root path of blosc.",
-	"/usr",
-)
-
-options.Add(
-	"HDF5_ROOT",
-	"The root path of hdf5.",
-	"/usr",
+    "FREETYPE_ROOT",
+    "The root path of freetype.",
+    "/usr",
 )
 
 # general variables
@@ -441,6 +351,8 @@ env = Environment(
 
 	LIBPATH = [
 		"./lib",
+		"$BUILD_DIR/lib",
+		"$LOCATE_DEPENDENCY_LIBPATH",
 	],
 
 	FRAMEWORKPATH = "$BUILD_DIR/lib",
@@ -458,8 +370,8 @@ for path in [
 		#"$BUILD_DIR/include/python$PYTHON_VERSION",
 		#"$BUILD_DIR/include/OpenEXR",
 		"$BUILD_DIR/include/GL",
-		sysconfig.get_paths()['include'],
-		"$OPENEXR_ROOT/include/OpenEXR",
+        sysconfig.get_paths()['include'],
+        "$OPENEXR_ROOT/include/OpenEXR",
 	] + env["LOCATE_DEPENDENCY_SYSTEMPATH"] :
 
 	env.Append(
@@ -827,7 +739,7 @@ libraries = {
 	"GafferImage" : {
 		"envAppends" : {
 			#"CPPPATH" : [ "$BUILD_DIR/include/freetype2" ],
-			"CPPPATH" : [ "$FREETYPE_ROOT/include/freetype2" ],
+            "CPPPATH" : [ "$FREETYPE_ROOT/include/freetype2" ],
 			"LIBS" : [ "Gaffer", "GafferDispatch", "Iex$OPENEXR_LIB_SUFFIX", "IECoreImage$CORTEX_LIB_SUFFIX", "OpenImageIO$OIIO_LIB_SUFFIX", "OpenColorIO$OCIO_LIB_SUFFIX", "freetype" ],
 		},
 		"pythonEnvAppends" : {
@@ -1051,62 +963,6 @@ for library in ( "GafferUI", ) :
 	if int( env["QT_VERSION"] ) > 4 :
 		addQtLibrary( library, "Widgets" )
 
-###############################################################################################
-# Install third-party libraries into build directory
-###############################################################################################
-
-thirdPartyLibsEnv = baseLibEnv.Clone()
-boost_libs = glob.glob(os.sep.join([env['BOOST_ROOT'], 'lib', 'libboost_*.so']))
-alembic_libs = glob.glob(os.sep.join([env['ALEMBIC_ROOT'], 'lib', 'libAlembic.so']))
-blosc_libs = [os.sep.join([env['BLOSC_ROOT'], 'lib64', 'libblosc.so'])]
-freetype_libs = [os.sep.join([env['FREETYPE_ROOT'], 'lib64', 'libfreetype.so'])]
-glew_libs = [os.sep.join([env['GLEW_ROOT'], 'lib64', 'libGLEW.so'])]
-hdf5_libs = [os.sep.join([env['HDF5_ROOT'], 'lib64', 'libhdf5.so'])]
-ilmbase_libnames = ['libHalf.so', 'libIex.so', 'libIexMath.so', 'libImath.so', 'libIlmThread.so', 'libPyIex.so', 'libPyImath.so',]
-ilmbase_libs = []
-for ilmbase_libname in ilmbase_libnames:
-	ilmbase_libs.append(os.sep.join([env['ILMBASE_ROOT'], 'lib', ilmbase_libname]))
-oiio_libs = glob.glob(os.sep.join([env['OIIO_ROOT'], 'lib', 'libOpenImageIO*.so']))
-qt_libs = glob.glob(os.sep.join([env['QT_ROOT'], 'lib', 'libQt*.so']))
-tbb_libs = glob.glob(os.sep.join([env['TBB_ROOT'], 'lib', 'libtbb*.so']))
-xerces_libs = [os.sep.join([env['XERCES_ROOT'], 'lib', 'libxerces-c.so'])]
-osl_libs = glob.glob(os.sep.join([env['OSL_ROOT'], 'lib', 'libosl*.so']))
-usd_libnames = ['libarch.so', 'libtf.so', 'libgf.so', 'libjs.so', 'libtrace.so', 'libwork.so', 'libplug.so', 'libvt.so', 'libar.so', 'libkind.so', 'libsdf.so', 'libndr.so', 'libsdr.so', 'libpcp.so', 'libgarch.so', 'libhf.so', 'libcameraUtil.so', 'libglf.so', 'libhd.so', 'libhdSt.so', 'libhdx.so', 'libhdStream.so',]
-usd_libs = []
-for usd_libname in usd_libnames:
-	usd_libs.append(os.sep.join([env['USD_ROOT'], 'lib', usd_libname]))
-usd_libs += glob.glob(os.sep.join([env['USD_ROOT'], 'lib', 'libusd*.so']))
-cortex_libs = glob.glob(os.sep.join([env['CORTEX_ROOT'], 'lib', 'libIECore*.so']))
-
-all_libs = boost_libs + alembic_libs + blosc_libs + freetype_libs + glew_libs + hdf5_libs + \
-	ilmbase_libs + oiio_libs + qt_libs + tbb_libs + xerces_libs + osl_libs + usd_libs + cortex_libs
-
-def followSymlink(target, source, env):
-	target = str(target[0])
-	source = str(source[0])
-	all_libs = glob.glob(source + '*')
-	dest_dir = os.path.abspath(os.path.dirname(target))
-	print 'all libs'
-	print all_libs
-	for lib in all_libs:
-		dest = os.path.join(dest_dir, os.path.basename(lib))
-		if os.path.islink(lib):
-			dirname = os.path.dirname(lib)
-			#linked_to = os.path.join(dest_dir, os.readlink(lib))
-			linked_to = os.readlink(lib)
-			full_path = os.path.join(dest_dir, linked_to)
-			if os.path.exists(full_path):
-				print 'file exist', full_path
-				return
-			print 'linking to', dest
-			os.symlink(linked_to, dest)
-		else:
-			print 'copy', lib, 'to', dest
-			shutil.copy2(lib, dest)
-
-for lib in all_libs:
-	install_obj = thirdPartyLibsEnv.Command("$BUILD_DIR/lib/%s" %os.path.basename(lib), lib, followSymlink)
-	thirdPartyLibsEnv.Alias("build", install_obj)
 
 ###############################################################################################
 # The stuff that actually builds the libraries and python modules
