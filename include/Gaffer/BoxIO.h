@@ -39,12 +39,22 @@
 
 #include "Gaffer/Node.h"
 #include "Gaffer/Plug.h"
+#include "Gaffer/TypedPlug.h"
+
+namespace GafferModule
+{
+
+// Forward declaration to enable friend declaration
+class BoxIOSerialiser;
+
+} // namespace GafferModule
 
 namespace Gaffer
 {
 
 IE_CORE_FORWARDDECLARE( StringPlug )
 IE_CORE_FORWARDDECLARE( Box )
+IE_CORE_FORWARDDECLARE( Switch )
 
 /// Utility node for representing plug promotion
 /// graphically in the GraphEditor. Note that this has
@@ -81,6 +91,11 @@ class GAFFER_API BoxIO : public Node
 		/// construction to determine what
 		/// sort of plug this node will promote.
 		void setup( const Plug *plug );
+		/// Sets up the promoted plug on the parent box.
+		/// This is called automatically by `setup()`, so
+		/// there is no need to call it unless `setup()`
+		/// was called before parenting the BoxIO to a Box.
+		void setupPromotedPlug();
 
 		/// The internal plug which
 		/// can be used within the box.
@@ -135,20 +150,34 @@ class GAFFER_API BoxIO : public Node
 		Gaffer::Plug *outPlugInternal();
 		const Gaffer::Plug *outPlugInternal() const;
 
+		Gaffer::Plug *passThroughPlugInternal();
+		const Gaffer::Plug *passThroughPlugInternal() const;
+
+		BoolPlug *enabledPlugInternal();
+		const BoolPlug *enabledPlugInternal() const;
+
 		void parentChanging( Gaffer::GraphComponent *newParent ) override;
+		void parentChanged( Gaffer::GraphComponent *oldParent ) override;
 
 	private :
 
+		friend class GafferModule::BoxIOSerialiser;
+
 		IECore::InternedString inPlugName() const;
 		IECore::InternedString outPlugName() const;
+
+		Gaffer::Switch *switchInternal();
+		const Gaffer::Switch *switchInternal() const;
 
 		Plug::Direction m_direction;
 
 		boost::signals::scoped_connection m_promotedPlugNameChangedConnection;
 		boost::signals::scoped_connection m_promotedPlugParentChangedConnection;
 
+		void setupPassThrough();
+		void setupBoxEnabledPlug();
+		void scriptExecuted( ScriptNode *script );
 		void plugSet( Plug *plug );
-		void parentChanged( GraphComponent *oldParent );
 		void plugInputChanged( Plug *plug );
 		void promotedPlugNameChanged( GraphComponent *graphComponent );
 		void promotedPlugParentChanged( GraphComponent *graphComponent );

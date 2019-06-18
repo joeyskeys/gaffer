@@ -66,28 +66,38 @@ GafferUI.Backups.acquire( application )
 ## Help menu
 ###########################################################################
 
-for menuItem, url in [
+def addHelpMenuItems( items ) :
+
+	for menuItem, url in items:
+
+		if url and "://" not in url :
+			url = os.path.expandvars( url )
+			url = "file://" + url if os.path.isfile( url ) else ""
+
+		scriptWindowMenu.append(
+			"/Help/" + menuItem,
+			{
+				"divider" : url is None,
+				"command" : functools.partial( GafferUI.showURL, url ),
+				"active" : bool( url )
+			}
+		)
+
+addHelpMenuItems( [
 		( "User Guide", "$GAFFER_ROOT/doc/gaffer/html/index.html" ),
-		( "Node Reference", "$GAFFER_ROOT/doc/gaffer/html/Reference/NodeReference/index.html" ),
+		( "Node Reference", "$GAFFER_ROOT/doc/gaffer/html/Reference/NodeReference/index.html" )
+] )
+
+GafferUI.Examples.appendExamplesSubmenuDefinition( scriptWindowMenu, "/Help/Examples" )
+
+addHelpMenuItems( [
 		( "License", "$GAFFER_ROOT/doc/gaffer/html/Appendices/License/index.html" ),
 		( "LocalDocsDivider", None ),
 		( "Forum", "https://groups.google.com/forum/#!forum/gaffer-dev" ),
 		( "Issue Tracker", "https://github.com/GafferHQ/gaffer/issues" ),
-		( "CoreDocsDivider", None ),
-	] :
+		( "CoreDocsDivider", None )
+] )
 
-	if url and "://" not in url :
-		url = os.path.expandvars( url )
-		url = "file://" + url if os.path.isfile( url ) else ""
-
-	scriptWindowMenu.append(
-		"/Help/" + menuItem,
-		{
-			"divider" : url is None,
-			"command" : functools.partial( GafferUI.showURL, url ),
-			"active" : bool( url )
-		}
-	)
 
 ## Node creation menu
 ###########################################################################
@@ -112,17 +122,13 @@ if moduleSearchPath.find( "arnold" ) :
 		nodeMenu.append( "/Arnold/Globals/Background", GafferArnold.ArnoldBackground, searchText = "ArnoldBackground" )
 		nodeMenu.append( "/Arnold/Globals/AOVShader", GafferArnold.ArnoldAOVShader, searchText = "ArnoldAOVShader" )
 		nodeMenu.append( "/Arnold/Displacement", GafferArnold.ArnoldDisplacement, searchText = "ArnoldDisplacement"  )
+		nodeMenu.append( "/Arnold/CameraShaders", GafferArnold.ArnoldCameraShaders, searchText = "ArnoldCameraShaders"  )
 		nodeMenu.append( "/Arnold/VDB", GafferArnold.ArnoldVDB, searchText = "ArnoldVDB"  )
 		nodeMenu.append( "/Arnold/Attributes", GafferArnold.ArnoldAttributes, searchText = "ArnoldAttributes" )
-		nodeMenu.append(
-			"/Arnold/Render", GafferArnold.ArnoldRender,
-			plugValues = {
-				"fileName" : "${project:rootDirectory}/asses/${script:name}/${script:name}.####.ass",
-			},
-			searchText = "ArnoldRender"
-		)
+		nodeMenu.append( "/Arnold/Render", GafferArnold.ArnoldRender, searchText = "ArnoldRender" )
 		nodeMenu.append( "/Arnold/Interactive Render", GafferArnold.InteractiveArnoldRender, searchText = "InteractiveArnoldRender" )
 		nodeMenu.append( "/Arnold/Shader Ball", GafferArnold.ArnoldShaderBall, searchText = "ArnoldShaderBall" )
+		nodeMenu.append( "/Arnold/Arnold Texture Bake", GafferArnold.ArnoldTextureBake, searchText = "ArnoldTextureBake" )
 
 		GafferArnoldUI.CacheMenu.appendDefinitions( scriptWindowMenu, "/Tools/Arnold" )
 
@@ -186,11 +192,12 @@ if moduleSearchPath.find( "nsi.py" ) and moduleSearchPath.find( "GafferDelight" 
 				Gaffer.Metadata.registerValue( node["geometryParameters"], "plugValueWidget:type", "" )
 
 				if shape == "distant" :
-					node["geometryParameters"].addMember( "angle", 0.0, plugName = "angle" )
+					node["geometryParameters"].addChild( Gaffer.NameValuePlug( "angle", 0.0, plugName = "angle", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ) )
 
-			Gaffer.Metadata.registerPlugValue( node["shape"], "plugValueWidget:type", "" )
+			Gaffer.Metadata.registerValue( node["shape"], "plugValueWidget:type", "" )
 
-			visibilityPlug = node["attributes"].addMember( "dl:visibility.camera", False, "cameraVisibility" )
+			visibilityPlug = Gaffer.NameValuePlug( "dl:visibility.camera", False, "cameraVisibility", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic )
+			node["attributes"].addChild( visibilityPlug )
 			Gaffer.MetadataAlgo.setReadOnly( visibilityPlug["name"], True )
 
 			return node
@@ -249,13 +256,7 @@ if "APPLESEED" in os.environ :
 
 		nodeMenu.append( "/Appleseed/Attributes", GafferAppleseed.AppleseedAttributes, searchText = "AppleseedAttributes" )
 		nodeMenu.append( "/Appleseed/Options", GafferAppleseed.AppleseedOptions, searchText = "AppleseedOptions" )
-		nodeMenu.append(
-			"/Appleseed/Render", GafferAppleseed.AppleseedRender,
-			plugValues = {
-				"fileName" : "${project:rootDirectory}/appleseeds/${script:name}/${script:name}.####.appleseed",
-			},
-			searchText = "AppleseedRender"
-		)
+		nodeMenu.append( "/Appleseed/Render", GafferAppleseed.AppleseedRender, searchText = "AppleseedRender" )
 		nodeMenu.append( "/Appleseed/Interactive Render", GafferAppleseed.InteractiveAppleseedRender, searchText = "InteractiveAppleseedRender" )
 		nodeMenu.append( "/Appleseed/Shader Ball", GafferAppleseed.AppleseedShaderBall, searchText = "AppleseedShaderBall" )
 
@@ -294,11 +295,12 @@ nodeMenu.append( "/Scene/Object/Collect Primitive Variables", GafferScene.Collec
 nodeMenu.append( "/Scene/Object/Mesh Type", GafferScene.MeshType, searchText = "MeshType" )
 nodeMenu.append( "/Scene/Object/Points Type", GafferScene.PointsType, searchText = "PointsType" )
 nodeMenu.append( "/Scene/Object/Mesh To Points", GafferScene.MeshToPoints, searchText = "MeshToPoints" )
+nodeMenu.append( "/Scene/Object/Wireframe", GafferScene.Wireframe )
 nodeMenu.append( "/Scene/Object/Light To Camera", GafferScene.LightToCamera, searchText = "LightToCamera" )
 nodeMenu.append( "/Scene/Object/Map Projection", GafferScene.MapProjection, searchText = "MapProjection" )
 nodeMenu.append( "/Scene/Object/Map Offset", GafferScene.MapOffset, searchText = "MapOffset"  )
 nodeMenu.append( "/Scene/Object/Parameters", GafferScene.Parameters )
-nodeMenu.append( "/Scene/Object/Mesh Tangents", GafferScene.MeshTangents, searchText = "MeshTangents" )
+nodeMenu.append( "/Scene/Object/Mesh Tangents", GafferScene.MeshTangents, searchText = "MeshTangents", postCreator = GafferSceneUI.MeshTangentsUI.postCreate )
 nodeMenu.append( "/Scene/Object/Delete Faces", GafferScene.DeleteFaces, searchText = "DeleteFaces" )
 nodeMenu.append( "/Scene/Object/Delete Curves", GafferScene.DeleteCurves, searchText = "DeleteCurves" )
 nodeMenu.append( "/Scene/Object/Delete Points", GafferScene.DeletePoints, searchText = "DeletePoints" )
@@ -307,11 +309,11 @@ nodeMenu.append( "/Scene/Object/Reverse Winding", GafferScene.ReverseWinding, se
 nodeMenu.append( "/Scene/Object/Mesh Distortion", GafferScene.MeshDistortion, searchText = "MeshDistortion" )
 nodeMenu.append( "/Scene/Object/Camera Tweaks", GafferScene.CameraTweaks, searchText = "CameraTweaks" )
 nodeMenu.append( "/Scene/Attributes/Shader Assignment", GafferScene.ShaderAssignment, searchText = "ShaderAssignment" )
+nodeMenu.append( "/Scene/Attributes/Shader Tweaks", GafferScene.ShaderTweaks, searchText = "ShaderTweaks" )
 nodeMenu.append( "/Scene/Attributes/Standard Attributes", GafferScene.StandardAttributes, searchText = "StandardAttributes" )
 nodeMenu.append( "/Scene/Attributes/Custom Attributes", GafferScene.CustomAttributes, searchText = "CustomAttributes" )
 nodeMenu.append( "/Scene/Attributes/Delete Attributes", GafferScene.DeleteAttributes, searchText = "DeleteAttributes" )
 nodeMenu.append( "/Scene/Attributes/Attribute Visualiser", GafferScene.AttributeVisualiser, searchText = "AttributeVisualiser" )
-nodeMenu.append( "/Scene/Attributes/Light Tweaks", GafferScene.LightTweaks, searchText = "LightTweaks" )
 nodeMenu.append( "/Scene/Attributes/Copy Attributes", GafferScene.CopyAttributes, searchText = "CopyAttributes" )
 nodeMenu.append( "/Scene/Attributes/Collect Transforms", GafferScene.CollectTransforms, searchText = "CollectTransforms" )
 nodeMenu.append( "/Scene/Filters/Set Filter", GafferScene.SetFilter, searchText = "SetFilter" )
@@ -338,6 +340,7 @@ nodeMenu.append( "/Scene/Globals/Custom Options", GafferScene.CustomOptions, sea
 nodeMenu.append( "/Scene/Globals/Delete Options", GafferScene.DeleteOptions, searchText = "DeleteOptions" )
 nodeMenu.append( "/Scene/Globals/Copy Options", GafferScene.CopyOptions, searchText = "CopyOptions" )
 nodeMenu.append( "/Scene/Globals/Set", GafferScene.Set )
+nodeMenu.append( "/Scene/Globals/Set Visualiser", GafferScene.SetVisualiser, searchText = "SetVisualiser" )
 nodeMenu.append( "/Scene/OpenGL/Attributes", GafferScene.OpenGLAttributes, searchText = "OpenGLAttributes" )
 nodeMenu.definition().append( "/Scene/OpenGL/Shader", { "subMenu" : GafferSceneUI.OpenGLShaderUI.shaderSubMenu } )
 nodeMenu.append( "/Scene/OpenGL/Render", GafferScene.OpenGLRender, searchText = "OpenGLRender" )
@@ -474,9 +477,7 @@ import GafferDispatchUI
 nodeMenu.append( "/Dispatch/System Command", GafferDispatch.SystemCommand, searchText = "SystemCommand" )
 nodeMenu.append( "/Dispatch/Python Command", GafferDispatch.PythonCommand, searchText = "PythonCommand" )
 nodeMenu.append( "/Dispatch/Task List", GafferDispatch.TaskList, searchText = "TaskList" )
-nodeMenu.append( "/Dispatch/Task Switch", GafferDispatch.TaskSwitch, searchText = "TaskSwitch" )
 nodeMenu.append( "/Dispatch/Wedge", GafferDispatch.Wedge )
-nodeMenu.append( "/Dispatch/Variables", GafferDispatch.TaskContextVariables, searchText = "TaskContextVariables" )
 nodeMenu.append( "/Dispatch/Frame Mask", GafferDispatch.FrameMask, searchText = "FrameMask" )
 
 # Utility nodes

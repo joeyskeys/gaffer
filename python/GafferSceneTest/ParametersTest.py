@@ -61,15 +61,15 @@ class ParametersTest( GafferSceneTest.SceneTestCase ) :
 		self.assertScenesEqual( parameters["out"], group["out"] )
 		self.assertSceneHashesEqual( parameters["out"], group["out"] )
 
-		parameters["parameters"].addMember( "test", 10 )
+		parameters["parameters"].addChild( Gaffer.NameValuePlug( "test", 10 ) )
 
 		filter = GafferScene.PathFilter()
 		filter["paths"].setValue( IECore.StringVectorData( [ "/group/*" ] ) )
 		parameters["filter"].setInput( filter["out"] )
 
 		self.assertSceneValid( parameters["out"] )
-		self.assertScenesEqual( parameters["out"], group["out"], childPlugNamesToIgnore = ( "object", ) )
-		self.assertSceneHashesEqual( parameters["out"], group["out"], childPlugNamesToIgnore = ( "object", ) )
+		self.assertScenesEqual( parameters["out"], group["out"], checks = self.allSceneChecks - { "object" } )
+		self.assertSceneHashesEqual( parameters["out"], group["out"], checks = self.allSceneChecks - { "object" } )
 
 		cameraIn = group["out"].object( "/group/camera" )
 		cameraOut = parameters["out"].object( "/group/camera" )
@@ -90,7 +90,8 @@ class ParametersTest( GafferSceneTest.SceneTestCase ) :
 	def testAffects( self ) :
 
 		parameters = GafferScene.Parameters()
-		p = parameters["parameters"].addOptionalMember( "test", 10 )
+		p = Gaffer.NameValuePlug( "test", 10, True )
+		parameters["parameters"].addChild( p )
 
 		self.assertEqual( parameters.affects( p["name"] ), [ parameters["out"]["object"] ] )
 		self.assertEqual( parameters.affects( p["enabled"] ), [ parameters["out"]["object"] ] )

@@ -68,10 +68,10 @@ class LabelPlugValueWidget( GafferUI.PlugValueWidget ) :
 
 		# connecting at group 0 so we're called before the slots
 		# connected by the NameLabel class.
-		self.__dragBeginConnection = self.__label.dragBeginSignal().connect( 0, Gaffer.WeakMethod( self.__dragBegin ) )
-		self.__dragEndConnection = self.__label.dragEndSignal().connect( 0, Gaffer.WeakMethod( self.__dragEnd ) )
+		self.__label.dragBeginSignal().connect( 0, Gaffer.WeakMethod( self.__dragBegin ), scoped = False )
+		self.__label.dragEndSignal().connect( 0, Gaffer.WeakMethod( self.__dragEnd ), scoped = False )
 
-		self.__plugMetadataChangedConnection = Gaffer.Metadata.plugValueChangedSignal().connect( Gaffer.WeakMethod( self.__plugMetadataChanged ) )
+		Gaffer.Metadata.plugValueChangedSignal().connect( Gaffer.WeakMethod( self.__plugMetadataChanged ), scoped = False )
 
 		self._addPopupMenu( self.__label )
 
@@ -103,11 +103,12 @@ class LabelPlugValueWidget( GafferUI.PlugValueWidget ) :
 		result = GafferUI.PlugValueWidget.getToolTip( self )
 
 		if self.getPlug() is not None :
-			result += "<ul>"
-			result += "<li>Left drag to connect</li>"
+			if result :
+				result += "\n"
+			result += "## Actions\n\n"
+			result += "- Left drag to connect\n"
 			if hasattr( self.getPlug(), "getValue" ) :
-				result += "<li>Shift-left or middle drag to transfer value</li>"
-			result += "<ul>"
+				result += "- Shift+left or middle drag to transfer value"
 
 		return result
 

@@ -51,6 +51,7 @@ using namespace GafferScene;
 
 static IECore::InternedString g_lightsSetName( "__lights" );
 static IECore::InternedString g_defaultLightsSetName( "defaultLights" );
+static IECore::InternedString g_visualiserScaleAttribute( "visualiser:scale" );
 
 IE_CORE_DEFINERUNTIMETYPED( Light );
 
@@ -62,6 +63,7 @@ Light::Light( const std::string &name )
 	storeIndexOfNextChild( g_firstPlugIndex );
 	addChild( new Plug( "parameters" ) );
 	addChild( new BoolPlug( "defaultLight", Gaffer::Plug::Direction::In, true ) );
+	addChild( new FloatPlug( "visualiserScale", Gaffer::Plug::Direction::In, 1.0 ) );
 }
 
 Light::~Light()
@@ -88,18 +90,36 @@ const Gaffer::BoolPlug *Light::defaultLightPlug() const
 	return getChild<BoolPlug>( g_firstPlugIndex + 1 );
 }
 
+Gaffer::FloatPlug *Light::visualiserScalePlug()
+{
+	return getChild<FloatPlug>( g_firstPlugIndex + 2 );
+}
+
+const Gaffer::FloatPlug *Light::visualiserScalePlug() const
+{
+	return getChild<FloatPlug>( g_firstPlugIndex + 2 );
+}
+
 void Light::affects( const Gaffer::Plug *input, AffectedPlugsContainer &outputs ) const
 {
 	ObjectSource::affects( input, outputs );
 
-	if( parametersPlug()->isAncestorOf( input ) )
+	if( parametersPlug()->isAncestorOf( input ) || input == visualiserScalePlug() )
 	{
 		outputs.push_back( outPlug()->attributesPlug() );
 	}
 
 	if( input == defaultLightPlug() )
 	{
+		// \todo: Perhaps this is indicative of a hole in the ObjectSource API. In
+		// theory the Light class has no responsibility towards the `setPlug()` since
+		// that is meant to be dealt with in the ObjectSource base class. The
+		// subclasses are meant to only worry about `hashStandardSetNames()` and
+		// `computeStandardSetNames()`. We should maybe have a matching `virtual bool
+		// affectsStandardSetNames( const Plug *input )` that subclasses implement
+		// and is called in `ObjectSource::affects()`
 		outputs.push_back( outPlug()->setNamesPlug() );
+		outputs.push_back( outPlug()->setPlug() );
 	}
 }
 
@@ -117,6 +137,7 @@ IECore::ConstObjectPtr Light::computeSource( const Context *context ) const
 void Light::hashAttributes( const SceneNode::ScenePath &path, const Gaffer::Context *context, const ScenePlug *parent, IECore::MurmurHash &h ) const
 {
 	hashLight( context, h );
+	visualiserScalePlug()->hash( h );
 }
 
 IECore::ConstCompoundObjectPtr Light::computeAttributes( const SceneNode::ScenePath &path, const Gaffer::Context *context, const ScenePlug *parent ) const
@@ -125,16 +146,14 @@ IECore::ConstCompoundObjectPtr Light::computeAttributes( const SceneNode::SceneP
 
 	std::string lightAttribute = "light";
 
-	IECore::ObjectVectorPtr lightShaders = computeLight( context );
-	if( lightShaders->members().size() )
+	IECoreScene::ShaderNetworkPtr lightShaders = computeLight( context );
+	if( const IECoreScene::Shader *shader = lightShaders->outputShader() )
 	{
-		if( const IECoreScene::Shader *shader = IECore::runTimeCast<const IECoreScene::Shader>( lightShaders->members().back().get() ) )
-		{
-			lightAttribute = shader->getType();
-		}
+		lightAttribute = shader->getType();
 	}
 
 	result->members()[lightAttribute] = lightShaders;
+	result->members()[g_visualiserScaleAttribute] = new IECore::FloatData( visualiserScalePlug()->getValue() );
 
 	return result;
 }

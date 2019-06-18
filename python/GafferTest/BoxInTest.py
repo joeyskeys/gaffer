@@ -34,6 +34,7 @@
 #
 ##########################################################################
 
+import os
 import unittest
 
 import IECore
@@ -194,7 +195,7 @@ class BoxInTest( GafferTest.TestCase ) :
 		s["b1"]["i"].setup( s["b1"]["n"]["op1"] )
 
 		self.assertEqual( Gaffer.Metadata.value( s["b1"]["i"].promotedPlug(), "test" ), "testValue" )
-		self.assertEqual( Gaffer.Metadata.value( s["b1"]["i"].promotedPlug(), "layout:section" ), None )
+		self.assertNotIn( "layout:section", Gaffer.Metadata.registeredValues( s["b1"]["i"].promotedPlug(), instanceOnly = True ) )
 
 		s["b2"] = Gaffer.Box()
 		s.execute(
@@ -203,7 +204,7 @@ class BoxInTest( GafferTest.TestCase ) :
 		)
 
 		self.assertEqual( Gaffer.Metadata.value( s["b2"]["i"].promotedPlug(), "test" ), "testValue" )
-		self.assertEqual( Gaffer.Metadata.value( s["b2"]["i"].promotedPlug(), "layout:section" ), None )
+		self.assertNotIn( "layout:section", Gaffer.Metadata.registeredValues( s["b2"]["i"].promotedPlug(), instanceOnly = True ) )
 
 	def testNoduleSectionMetadata( self ) :
 
@@ -393,6 +394,10 @@ class BoxInTest( GafferTest.TestCase ) :
 		self.assertTrue( sumPromoted.source().isSame( s["b"]["n"]["sum"] ) )
 
 		self.assertEqual( Gaffer.BoxIO.canInsert( s["b"] ), False )
+		# Even if we ignore `canInsert()` and call `insert()`, nothing should happen.
+		Gaffer.BoxIO.insert( s["b"] )
+		self.assertEqual( len( s["b"].children( Gaffer.BoxIn ) ), 1 )
+		self.assertEqual( len( s["b"].children( Gaffer.BoxOut ) ), 1 )
 
 	def testNonSerialisableInput( self ) :
 
@@ -429,6 +434,60 @@ class BoxInTest( GafferTest.TestCase ) :
 		s2.execute( s.serialise() )
 
 		self.assertTrue( s2["b"]["n"]["in"].source().isSame( s2["b"]["in"] ) )
+
+	def testSetupNone( self ) :
+
+		b = Gaffer.BoxIn()
+		with self.assertRaisesRegexp( Exception, "Python argument types" ) :
+			b.setup( None )
+
+	def testSetupNoArgument( self ) :
+
+		b = Gaffer.BoxIn()
+		with self.assertRaisesRegexp( Exception, "Python argument types" ) :
+			b.setup()
+
+	def testSerialisationUsesSetup( self ) :
+
+		s = Gaffer.ScriptNode()
+
+		s["b"] = Gaffer.BoxIn()
+		s["b"].setup( Gaffer.IntPlug() )
+
+		ss = s.serialise()
+		self.assertIn( "setup", ss )
+		self.assertNotIn( "setInput", ss )
+		self.assertNotIn( "__in", ss )
+		self.assertEqual( ss.count( "addChild" ), 1 )
+
+	def testSerialisationWithReferenceSibling( self ) :
+
+		s1 = Gaffer.ScriptNode()
+
+		s1["b"] = Gaffer.Box()
+		s1["b"]["i"] = Gaffer.BoxIn()
+		s1["b"]["i"].setup( Gaffer.IntPlug())
+
+		s1["r"] = Gaffer.Reference()
+		s1["r"].load( os.path.dirname( __file__ ) + "/references/empty.grf" )
+
+		s2 = Gaffer.ScriptNode()
+		s2.execute( s1.serialise() )
+
+		self.assertEqual( s1["b"].keys(), s2["b"].keys() )
+
+	def testPlugMetadataSerialisation( self ) :
+
+		s1 = Gaffer.ScriptNode()
+		s1["b"] = Gaffer.BoxIn()
+		s1["b"].setup( Gaffer.IntPlug() )
+
+		Gaffer.Metadata.registerValue( s1["b"]["out"], "test", 1 )
+
+		s2 = Gaffer.ScriptNode()
+		s2.execute( s1.serialise() )
+
+		self.assertEqual( Gaffer.Metadata.value( s2["b"]["out"], "test" ), 1 )
 
 if __name__ == "__main__":
 	unittest.main()

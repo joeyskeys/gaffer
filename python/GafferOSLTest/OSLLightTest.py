@@ -96,7 +96,7 @@ class OSLLightTest( GafferOSLTest.OSLTestCase ) :
 		node["shape"].setValue( node.Shape.Geometry )
 		node["geometryType"].setValue( "teapot" )
 		node["geometryBound"].setValue( imath.Box3f( imath.V3f( -0.5 ), imath.V3f( 0.5 ) ) )
-		m = node["geometryParameters"].addMember( "color", imath.Color3f( 1, 0, 0 ) )
+		node["geometryParameters"].addChild( Gaffer.NameValuePlug( "color", imath.Color3f( 1, 0, 0 ) ) )
 
 		self.assertEqual(
 			node["out"].object( "/light" ),
@@ -117,7 +117,7 @@ class OSLLightTest( GafferOSLTest.OSLTestCase ) :
 		lightNode = GafferOSL.OSLLight()
 		lightNode.loadShader( constantShader )
 
-		shaderNode = GafferOSL.OSLShader()
+		shaderNode = GafferOSL.OSLShader( "shader" )
 		shaderNode.loadShader( addShader )
 
 		lightNode["parameters"]["Cs"].setInput( shaderNode["out"]["out"] )
@@ -125,8 +125,8 @@ class OSLLightTest( GafferOSLTest.OSLTestCase ) :
 		network = lightNode["out"].attributes( "/light" )["osl:light"]
 		self.assertEqual( len( network ), 2 )
 		self.assertEqual(
-			network[1].parameters["Cs"],
-			IECore.StringData( "link:" + network[0].parameters["__handle"].value + ".out" )
+			network.inputConnections( network.getOutput().shader ),
+			[ network.Connection( ( "shader", "out" ), ( network.getOutput().shader, "Cs" ) ) ]
 		)
 
 	def testAttributes( self ) :
@@ -136,7 +136,8 @@ class OSLLightTest( GafferOSLTest.OSLTestCase ) :
 		node = GafferOSL.OSLLight()
 		node.loadShader( shader )
 
-		m = node["attributes"].addMember( "user:test", 10 )
+		m = Gaffer.NameValuePlug( "user:test", 10 )
+		node["attributes"].addChild( m )
 		self.assertEqual( node["out"].attributes( "/light" )["user:test"].value, 10 )
 
 		m["value"].setValue( 20 )

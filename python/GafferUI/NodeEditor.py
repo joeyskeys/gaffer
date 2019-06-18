@@ -44,6 +44,8 @@ import IECore
 import Gaffer
 import GafferUI
 
+from Qt import QtWidgets
+
 class NodeEditor( GafferUI.NodeSetEditor ) :
 
 	def __init__( self, scriptNode, **kw ) :
@@ -98,6 +100,15 @@ class NodeEditor( GafferUI.NodeSetEditor ) :
 
 		GafferUI.NodeSetEditor._updateFromSet( self )
 
+		focusWidget = GafferUI.Widget._owner( QtWidgets.QApplication.focusWidget() )
+		if self.__column.isAncestorOf( focusWidget ) :
+			# The focus is in our editor, but it belongs to a widget we're about
+			# to delete. Transfer the focus up so that we don't lose the focus
+			# when we delete the widget.
+			## \todo Is there an argument for moving this fix to the ListContainer
+			# itself?
+			self.__column._qtWidget().setFocus()
+
 		del self.__column[:]
 		self.__nodeUI = None
 		self.__nameWidget = None
@@ -137,8 +148,8 @@ class NodeEditor( GafferUI.NodeSetEditor ) :
 							scoped = False
 						)
 
-				toolTip = "<h3>" + node.typeName().rpartition( ":" )[2] + "</h3>"
-				description = Gaffer.Metadata.nodeDescription( node )
+				toolTip = "# " + node.typeName().rpartition( ":" )[2]
+				description = Gaffer.Metadata.value( node, "description" )
 				if description :
 					toolTip += "\n\n" + description
 				infoSection.setToolTip( toolTip )
@@ -161,9 +172,10 @@ class NodeEditor( GafferUI.NodeSetEditor ) :
 
 	def __menuDefinition( self ) :
 
+		node = self.nodeUI().node()
 		result = IECore.MenuDefinition()
 
-		url = Gaffer.Metadata.value( self.nodeUI().node(), "documentation:url" )
+		url = Gaffer.Metadata.value( node, "documentation:url" )
 		result.append(
 			"/Documentation...",
 			{
@@ -171,6 +183,9 @@ class NodeEditor( GafferUI.NodeSetEditor ) :
 				"command" : functools.partial( GafferUI.showURL, url ),
 			}
 		)
+
+		nodeCls = type( node )
+		GafferUI.Examples.appendExamplesSubmenuDefinition( result, "/Examples", forNode = nodeCls )
 
 		result.append( "/DocumentationDivider", { "divider" : True } )
 

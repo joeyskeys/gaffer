@@ -486,6 +486,41 @@ class SwitchTest( GafferTest.TestCase ) :
 		n2["op1"].setValue( 10 )
 		self.assertNotIn( s["out"], { x[0] for x in cs } )
 
+	def testSerialisationUsesSetup( self ) :
+
+		s1 = Gaffer.ScriptNode()
+		s1["switch"] = Gaffer.Switch()
+		s1["switch"].setup( Gaffer.IntPlug() )
+
+		ss = s1.serialise()
+		self.assertIn( "setup", ss )
+		self.assertEqual( ss.count( "addChild" ), 1 )
+		self.assertNotIn( "Dynamic", ss )
+		self.assertNotIn( "Serialisable", ss )
+		self.assertNotIn( "setInput", ss )
+
+		s2 = Gaffer.ScriptNode()
+		s2.execute( ss )
+		self.assertIn( "in", s2["switch"] )
+		self.assertIn( "out", s2["switch"] )
+		self.assertIsInstance( s2["switch"]["in"][0], Gaffer.IntPlug )
+		self.assertIsInstance( s2["switch"]["out"], Gaffer.IntPlug )
+
+	def testPlugMetadataSerialisation( self ) :
+
+		s1 = Gaffer.ScriptNode()
+		s1["switch"] = Gaffer.Switch()
+		s1["switch"].setup( Gaffer.IntPlug() )
+
+		Gaffer.Metadata.registerValue( s1["switch"]["in"], "test", 1 )
+		Gaffer.Metadata.registerValue( s1["switch"]["out"], "test", 2 )
+
+		s2 = Gaffer.ScriptNode()
+		s2.execute( s1.serialise() )
+
+		self.assertEqual( Gaffer.Metadata.value( s2["switch"]["in"], "test" ), 1 )
+		self.assertEqual( Gaffer.Metadata.value( s2["switch"]["out"], "test" ), 2 )
+
 	def setUp( self ) :
 
 		GafferTest.TestCase.setUp( self )

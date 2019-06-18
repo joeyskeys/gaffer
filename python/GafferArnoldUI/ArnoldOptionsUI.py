@@ -77,6 +77,17 @@ def __samplingSummary( plug ) :
 		info.append( "Clamp AOVs {0}".format( "On" if plug["aaSampleClampAffectsAOVs"]["value"].getValue() else "Off" ) )
 	return ", ".join( info )
 
+def __adaptiveSamplingSummary( plug ) :
+
+	info = []
+	if plug["enableAdaptiveSampling"]["enabled"].getValue() :
+		info.append( "Enable %d" % plug["enableAdaptiveSampling"]["value"].getValue() )
+	if plug["aaSamplesMax"]["enabled"].getValue() :
+		info.append( "AA Max %d" % plug["aaSamplesMax"]["value"].getValue() )
+	if plug["aaAdaptiveThreshold"]["enabled"].getValue() :
+		info.append( "Threshold %d" % plug["aaAdaptiveThreshold"]["value"].getValue() )
+	return ", ".join( info )
+
 def __rayDepthSummary( plug ) :
 
 	info = []
@@ -161,6 +172,14 @@ def __loggingSummary( plug ) :
 
 	return ", ".join( info )
 
+def __statisticsSummary( plug ) :
+
+	info = []
+	if plug["statisticsFileName"]["enabled"].getValue() :
+		info.append( "File name: " + plug["statisticsFileName"]["value"].getValue() )
+
+	return ", ".join( info )
+
 def __licensingSummary( plug ) :
 
 	info = []
@@ -171,6 +190,16 @@ def __licensingSummary( plug ) :
 		if plug[name]["enabled"].getValue() :
 			info.append( label + " " + ( "On" if plug[name]["value"].getValue() else "Off" ) )
 
+	return ", ".join( info )
+
+def __gpuSummary( plug ) :
+
+	info = []
+	if plug["renderDevice"]["enabled"].getValue() :
+		info.append( "Device: %s" %  plug["renderDevice"]["value"].getValue() )
+
+	if plug["gpuMaxTextureResolution"]["enabled"].getValue() :
+		info.append( "Max Res: %i" % plug["gpuMaxTextureResolution"]["value"].getValue() )
 	return ", ".join( info )
 
 Gaffer.Metadata.registerNode(
@@ -192,6 +221,7 @@ Gaffer.Metadata.registerNode(
 
 			"layout:section:Rendering:summary", __renderingSummary,
 			"layout:section:Sampling:summary", __samplingSummary,
+			"layout:section:Adaptive Sampling:summary", __adaptiveSamplingSummary,
 			"layout:section:Ray Depth:summary", __rayDepthSummary,
 			"layout:section:Subdivision:summary", __subdivisionSummary,
 			"layout:section:Texturing:summary", __texturingSummary,
@@ -199,7 +229,9 @@ Gaffer.Metadata.registerNode(
 			"layout:section:Search Paths:summary", __searchPathsSummary,
 			"layout:section:Error Handling:summary", __errorHandlingSummary,
 			"layout:section:Logging:summary", __loggingSummary,
+			"layout:section:Statistics:summary", __statisticsSummary,
 			"layout:section:Licensing:summary", __licensingSummary,
+			"layout:section:GPU:summary", __gpuSummary,
 
 		],
 
@@ -422,6 +454,66 @@ Gaffer.Metadata.registerNode(
 
 		],
 
+		"options.lowLightThreshold" : [
+
+			"description",
+			"""
+			Light paths with less energy than this will be discarded.  This
+			saves tracing shadow rays, but cuts off the light when it gets dim.
+			Raising this improves performance, but makes the image potentially
+			darker in some areas.
+			""",
+
+			"layout:section", "Sampling",
+			"label", "Low Light Threshold",
+
+		],
+
+		"options.enableAdaptiveSampling" : [
+
+			"description",
+			"""
+			If adaptive sampling is enabled, Arnold will take a minimum
+			of ( aaSamples * aaSamples ) samples per pixel, and will then
+			take up to ( aaSamplesMax * aaSamplesMax ) samples per pixel,
+			or until the remaining estimated noise gets lower than
+			aaAdaptiveThreshold.
+
+			> Note : Arnold's adaptive sampling won't do anything if aaSamples == 1 : you need to set aaSamples to at least 2.
+			""",
+
+			"layout:section", "Adaptive Sampling",
+			"label", "Enable Adaptive Sampling",
+
+		],
+
+		"options.aaSamplesMax" : [
+
+			"description",
+			"""
+			The maximum sampling rate during adaptive sampling.  Like
+			aaSamples, this value is squared.  So aaSamplesMax == 6 means up to 36 samples per pixel.
+			""",
+
+			"layout:section", "Adaptive Sampling",
+			"label", "AA Samples Max",
+
+		],
+
+		"options.aaAdaptiveThreshold" : [
+
+			"description",
+			"""
+			How much leftover noise is acceptable when terminating adaptive sampling.  Higher values
+			accept more noise, lower values keep rendering longer to achieve smaller amounts of
+			noise.
+			""",
+
+			"layout:section", "Adaptive Sampling",
+			"label", "AA Adaptive Threshold",
+
+		],
+
 		# Ray Depth
 
 		"options.giTotalDepth" : [
@@ -511,7 +603,7 @@ Gaffer.Metadata.registerNode(
 			A global override for the maximum polymesh.subdiv_iterations.
 			""",
 
-			"layout:section", "Subdivision", 
+			"layout:section", "Subdivision",
 			"label", "Max Subdivisions",
 		],
 
@@ -728,7 +820,7 @@ Gaffer.Metadata.registerNode(
 
 		"options.abortOnError" : [
 
-			"description", 
+			"description",
 			"""
 			Aborts the render if an error is encountered.
 			""",
@@ -812,6 +904,21 @@ Gaffer.Metadata.registerNode(
 
 		],
 
+		# Statistics
+
+		"options.statisticsFileName" : [
+
+			"description",
+			"""
+			The name of a statistics file where Arnold will store structured
+			JSON statistics.
+			""",
+
+			"layout:section", "Statistics",
+			"label", "File Name",
+
+		],
+
 		# Licensing
 
 		"options.abortOnLicenseFail" : [
@@ -835,6 +942,38 @@ Gaffer.Metadata.registerNode(
 			""",
 
 			"layout:section", "Licensing",
+
+		],
+
+		# GPU
+
+		"options.renderDevice" : [
+
+			"description",
+			"""
+			Can be used to put Arnold in GPU rendering mode, using your graphics card instead of CPU.  This is currently a beta with limited stability, and missing support for OSL and volumes.
+			""",
+
+			"layout:section", "GPU",
+
+		],
+
+		"options.renderDevice.value": [
+
+			"plugValueWidget:type", 'GafferUI.PresetsPlugValueWidget',
+			"presetNames", IECore.StringVectorData( ["CPU", "GPU"] ),
+			"presetValues", IECore.StringVectorData( ["CPU", "GPU"] ),
+		],
+
+		"options.gpuMaxTextureResolution" : [
+
+			"description",
+			"""
+			If non-zero, this will omit the high resolution mipmaps when in GPU mode, to avoid running out of GPU memory.
+			""",
+
+			"layout:section", "GPU",
+			"label", "Max Texture Resolution",
 
 		],
 

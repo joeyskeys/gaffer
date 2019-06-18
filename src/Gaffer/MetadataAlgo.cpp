@@ -40,8 +40,12 @@
 #include "Gaffer/Metadata.h"
 #include "Gaffer/Node.h"
 #include "Gaffer/Plug.h"
+#include "Gaffer/Reference.h"
+#include "Gaffer/ScriptNode.h"
 
 #include "IECore/SimpleTypedData.h"
+
+#include <boost/regex.hpp>
 
 using namespace std;
 using namespace IECore;
@@ -52,18 +56,7 @@ namespace
 InternedString g_readOnlyName( "readOnly" );
 InternedString g_childNodesAreReadOnlyName( "childNodesAreReadOnly" );
 InternedString g_bookmarkedName( "bookmarked" );
-
-size_t findNth( const std::string &s, char c, int n )
-{
-	size_t result = 0;
-	while( n-- && result != string::npos )
-	{
-		result = s.find( c, result );
-	}
-
-	return result;
-}
-
+InternedString g_numericBookmarkBaseName( "numericBookmark" );
 IECore::InternedString g_connectionColorKey( "connectionGadget:color" );
 IECore::InternedString g_noduleColorKey( "nodule:color" );
 
@@ -78,6 +71,16 @@ void copy( const Gaffer::GraphComponent *src , Gaffer::GraphComponent *dst , IEC
 	{
 		Gaffer::Metadata::registerValue(dst, key, data, /* persistent =*/ true);
 	}
+}
+
+IECore::InternedString numericBookmarkMetadataName( int bookmark )
+{
+	if( bookmark < 1 || bookmark > 9 )
+	{
+		throw IECore::Exception( "Values for numeric bookmarks need to be in {1, ..., 9}." );
+	}
+
+	return g_numericBookmarkBaseName.string() + std::to_string( bookmark );
 }
 
 } // namespace
@@ -222,60 +225,144 @@ void bookmarks( const Node *node, std::vector<NodePtr> &bookmarks )
 	}
 }
 
-bool affectedByChange( const Plug *plug, IECore::TypeId changedNodeTypeId, const IECore::StringAlgo::MatchPattern &changedPlugPath, const Gaffer::Plug *changedPlug )
+void setNumericBookmark( ScriptNode *scriptNode, int bookmark, Node *node )
+{
+	if( scriptNode->isExecuting() && node && node->ancestor<Reference>() )
+	{
+		return;
+	}
+
+	// No other node can have the same bookmark value assigned
+	IECore::InternedString metadataName( numericBookmarkMetadataName( bookmark ) );
+	for( Node *nodeWithMetadata : Metadata::nodesWithMetadata( scriptNode, metadataName, /* instanceOnly = */ true ) )
+	{
+		// During deserialisation, we need to be careful as to not override
+		// existing numeric bookmarks.
+		if( scriptNode->isExecuting() )
+		{
+			return;
+		}
+
+		Metadata::deregisterValue( nodeWithMetadata, metadataName );
+	}
+
+	if( !node )
+	{
+		return;
+	}
+
+	// Replace a potentially existing value with the one that is to be assigned.
+	int currentValue = numericBookmark( node );
+	if( currentValue )
+	{
+		Metadata::deregisterValue( node, numericBookmarkMetadataName( currentValue) );
+	}
+
+	Metadata::registerValue( node, metadataName, new BoolData( true ), /* persistent = */ true );
+}
+
+Node *getNumericBookmark( ScriptNode *scriptNode, int bookmark )
+{
+	// Return the first valid one we find. There should only ever be just one valid matching node.
+	for( Node *nodeWithMetadata : Metadata::nodesWithMetadata( scriptNode, numericBookmarkMetadataName( bookmark ), /* instanceOnly = */ true ) )
+	{
+		return nodeWithMetadata;
+	}
+
+	return nullptr;
+}
+
+int numericBookmark( const Node *node )
+{
+	// Return the first one we find. There should only ever be just one valid matching value.
+	for( int bookmark = 1; bookmark < 10; ++bookmark )
+	{
+		if( Metadata::value<BoolData>( node, numericBookmarkMetadataName( bookmark ) ) )
+		{
+			return bookmark;
+		}
+	}
+
+	return 0;
+}
+
+bool numericBookmarkAffectedByChange( const IECore::InternedString &changedKey )
+{
+	boost::regex expr{ g_numericBookmarkBaseName.string() + "[1-9]" };
+	return boost::regex_match( changedKey.string(), expr );
+}
+
+bool affectedByChange( const Plug *plug, IECore::TypeId changedTypeId, const IECore::StringAlgo::MatchPattern &changedPlugPath, const Gaffer::Plug *changedPlug )
 {
 	if( changedPlug )
 	{
 		return plug == changedPlug;
 	}
 
-	const Node *node = plug->node();
-	if( !node || !node->isInstanceOf( changedNodeTypeId ) )
+	if( changedPlugPath.empty() )
 	{
-		return false;
+		// Metadata has been registered for an entire plug type.
+		return plug->isInstanceOf( changedTypeId );
 	}
 
-	if( StringAlgo::match( plug->relativeName( node ), changedPlugPath ) )
+	const GraphComponent *ancestor = plug->parent();
+	vector<InternedString> plugPath( { plug->getName() } );
+	const StringAlgo::MatchPatternPath matchPatternPath = StringAlgo::matchPatternPath( changedPlugPath, '.' );
+	while( ancestor )
 	{
-		return true;
+		if( ancestor->isInstanceOf( changedTypeId ) )
+		{
+			if( StringAlgo::match( plugPath, matchPatternPath ) )
+			{
+				return true;
+			}
+		}
+		plugPath.insert( plugPath.begin(), ancestor->getName() );
+		ancestor = ancestor->parent();
 	}
 
 	return false;
 }
 
-bool childAffectedByChange( const GraphComponent *parent, IECore::TypeId changedNodeTypeId, const IECore::StringAlgo::MatchPattern &changedPlugPath, const Gaffer::Plug *changedPlug )
+bool childAffectedByChange( const GraphComponent *parent, IECore::TypeId changedTypeId, const IECore::StringAlgo::MatchPattern &changedPlugPath, const Gaffer::Plug *changedPlug )
 {
 	if( changedPlug )
 	{
 		return parent == changedPlug->parent();
 	}
 
-	const Node *node = runTimeCast<const Node>( parent );
-	if( !node )
+	if( changedPlugPath.empty() )
 	{
-		node = parent->ancestor<Node>();
-	}
-
-	if( !node || !node->isInstanceOf( changedNodeTypeId ) )
-	{
+		// Metadata has been registered for an entire plug type.
+		for( auto &c : parent->children() )
+		{
+			if( c->isInstanceOf( changedTypeId ) )
+			{
+				return true;
+			}
+		}
 		return false;
 	}
 
-	if( parent == node )
+	StringAlgo::MatchPatternPath matchPatternPath = StringAlgo::matchPatternPath( changedPlugPath, '.' );
+	matchPatternPath.pop_back(); // Remove element that would match child, so we can do matching for parent.
+
+	const GraphComponent *ancestor = parent;
+	vector<InternedString> path;
+	while( ancestor )
 	{
-		return changedPlugPath.find( '.' ) == string::npos;
+		if( ancestor->isInstanceOf( changedTypeId ) )
+		{
+			if( StringAlgo::match( path, matchPatternPath ) )
+			{
+				return true;
+			}
+		}
+		path.insert( path.begin(), ancestor->getName() );
+		ancestor = ancestor->parent();
 	}
 
-	const string parentName = parent->relativeName( node );
-	const size_t n = count( parentName.begin(), parentName.end(), '.' ) + 1;
-	const size_t parentMatchPatternEnd = findNth( changedPlugPath, '.', n );
-
-	if( parentMatchPatternEnd == string::npos )
-	{
-		return false;
-	}
-
-	return StringAlgo::match( parentName, changedPlugPath.substr( 0, parentMatchPatternEnd ) );
+	return false;
 }
 
 bool childAffectedByChange( const GraphComponent *parent, IECore::TypeId changedNodeTypeId, const Gaffer::Node *changedNode )
@@ -296,16 +383,29 @@ bool childAffectedByChange( const GraphComponent *parent, IECore::TypeId changed
 	return false;
 }
 
-bool ancestorAffectedByChange( const Plug *plug, IECore::TypeId changedNodeTypeId, const IECore::StringAlgo::MatchPattern &changedPlugPath, const Gaffer::Plug *changedPlug )
+bool ancestorAffectedByChange( const Plug *plug, IECore::TypeId changedTypeId, const IECore::StringAlgo::MatchPattern &changedPlugPath, const Gaffer::Plug *changedPlug )
 {
 	if( changedPlug )
 	{
 		return changedPlug->isAncestorOf( plug );
 	}
 
+	if( changedPlugPath.empty() )
+	{
+		// Metadata has been registered for an entire plug type.
+		while( ( plug = plug->parent<Plug>() ) )
+		{
+			if( plug->isInstanceOf( changedTypeId ) )
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 	while( ( plug = plug->parent<Plug>() ) )
 	{
-		if( affectedByChange( plug, changedNodeTypeId, changedPlugPath, changedPlug ) )
+		if( affectedByChange( plug, changedTypeId, changedPlugPath, changedPlug ) )
 		{
 			return true;
 		}

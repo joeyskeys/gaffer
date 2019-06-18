@@ -37,9 +37,12 @@
 #include "GafferDispatch/Dispatcher.h"
 
 #include "Gaffer/Context.h"
+#include "Gaffer/ContextProcessor.h"
+#include "Gaffer/Process.h"
 #include "Gaffer/ScriptNode.h"
 #include "Gaffer/StringPlug.h"
 #include "Gaffer/SubGraph.h"
+#include "Gaffer/Switch.h"
 
 #include "IECore/FrameRange.h"
 #include "IECore/MessageHandler.h"
@@ -47,6 +50,7 @@
 #include "boost/algorithm/string/predicate.hpp"
 #include "boost/filesystem.hpp"
 
+using namespace std;
 using namespace IECore;
 using namespace Gaffer;
 using namespace GafferDispatch;
@@ -60,6 +64,7 @@ static InternedString g_sizeBlindDataName( "dispatcher:size" );
 static InternedString g_executedBlindDataName( "dispatcher:executed" );
 static InternedString g_visitedBlindDataName( "dispatcher:visited" );
 static InternedString g_jobDirectoryContextEntry( "dispatcher:jobDirectory" );
+static InternedString g_scriptFileNameContextEntry( "dispatcher:scriptFileName" );
 static IECore::BoolDataPtr g_trueBoolData = new BoolData( true );
 
 size_t Dispatcher::g_firstPlugIndex = 0;
@@ -130,13 +135,36 @@ const std::string Dispatcher::jobDirectory() const
 	return m_jobDirectory;
 }
 
-std::string Dispatcher::createJobDirectory( const Context *context ) const
+void Dispatcher::createJobDirectory( const Gaffer::ScriptNode *script, Gaffer::Context *context ) const
 {
 	boost::filesystem::path jobDirectory( context->substitute( jobsDirectoryPlug()->getValue() ) );
 	jobDirectory /= context->substitute( jobNamePlug()->getValue() );
 
-	if ( jobDirectory == "" )
+	if( jobDirectory == "" )
 	{
+		const string outerJobDirectory = context->get<string>( g_jobDirectoryContextEntry, "" );
+		const string outerScriptFileName = context->get<string>( g_scriptFileNameContextEntry, "" );
+		const Process *outerProcess = Process::current();
+		InternedString outerProcessType = outerProcess ? outerProcess->type() : "";
+		if(
+			outerJobDirectory.size() && outerScriptFileName.size() &&
+			( outerProcessType == "taskNode:execute" || outerProcessType == "taskNode:executeSequence" ) &&
+			outerProcess->plug()->ancestor<ScriptNode>() == script
+		)
+		{
+			// We're being run inside a task executing in another dispatch
+			// for the same script. Borrow the job directory created by that dispatch.
+			/// \todo Should there be a more explicit way of saying "borrow
+			/// the outer directory"? Perhaps dispatchers should have a
+			/// plug specifying that they are to do a nested dispatch?
+			/// Consider this at the same time as we consider hosting
+			/// dispatchers directly in the graph.
+			m_jobDirectory = outerJobDirectory;
+			return;
+		}
+
+		/// \todo I think it would be better to throw here, rather than
+		/// litter the current directory.
 		jobDirectory = boost::filesystem::current_path().string();
 	}
 
@@ -154,8 +182,8 @@ std::string Dispatcher::createJobDirectory( const Context *context ) const
 		i = std::max( i, strtol( d.path().filename().c_str(), nullptr, 10 ) );
 	}
 
-	// Now create the next directory and return it. We do this in a loop
-	// until we successfully create a directory of our own, because we
+	// Now create the next directory. We do this in a loop until we
+	// successfully create a directory of our own, because we
 	// may be in a race against other processes.
 
 	boost::format formatter( "%06d" );
@@ -166,9 +194,27 @@ std::string Dispatcher::createJobDirectory( const Context *context ) const
 		numberedJobDirectory = jobDirectory / ( formatter % i ).str();
 		if( boost::filesystem::create_directory( numberedJobDirectory ) )
 		{
-			return numberedJobDirectory.string();
+			break;
 		}
 	}
+
+	m_jobDirectory = numberedJobDirectory.string();
+	context->set( g_jobDirectoryContextEntry, m_jobDirectory );
+
+	// Now figure out where we'll save the script in that directory, and
+	// advertise it via the context. We'll do the actual saving later.
+
+	boost::filesystem::path scriptFileName = script->fileNamePlug()->getValue();
+	if( scriptFileName.size() )
+	{
+		scriptFileName = numberedJobDirectory / scriptFileName.filename();
+	}
+	else
+	{
+		scriptFileName = numberedJobDirectory / "untitled.gfr";
+	}
+
+	context->set( g_scriptFileNameContextEntry, scriptFileName.string() );
 }
 
 /*
@@ -338,7 +384,10 @@ class Dispatcher::Batcher
 
 		void addTask( const TaskNode::Task &task )
 		{
-			addPreTask( m_rootBatch.get(), batchTasksWalk( task ) );
+			if( auto batch = batchTasksWalk( task ) )
+			{
+				addPreTask( m_rootBatch.get(), batch );
+			}
 		}
 
 		TaskBatch *rootBatch()
@@ -348,8 +397,33 @@ class Dispatcher::Batcher
 
 	private :
 
-		TaskBatchPtr batchTasksWalk( const TaskNode::Task &task, const std::set<const TaskBatch *> &ancestors = std::set<const TaskBatch *>() )
+		TaskBatchPtr batchTasksWalk( TaskNode::Task task, const std::set<const TaskBatch *> &ancestors = std::set<const TaskBatch *>() )
 		{
+			task = TaskNode::Task( task.plug()->source<TaskNode::TaskPlug>(), task.context() );
+			// Deal with Switch and ContextProcessor nodes. We need to do this manually
+			// because they only know how to deal with ValuePlugs, and we use TaskPlugs.
+			if( auto sw = runTimeCast<const Switch>( task.plug()->node() ) )
+			{
+				if( task.plug() == sw->outPlug() )
+				{
+					Context::Scope scopedTaskContext( task.context() );
+					task = TaskNode::Task( sw->activeInPlug()->source<TaskNode::TaskPlug>(), task.context() );
+				}
+			}
+			else if( auto contextProcessor = runTimeCast<const ContextProcessor>( task.plug()->node() ) )
+			{
+				if( task.plug() == contextProcessor->outPlug() )
+				{
+					Context::Scope scopedTaskContext( task.context() );
+					task = TaskNode::Task( contextProcessor->inPlug()->source<TaskNode::TaskPlug>(), contextProcessor->inPlugContext().get() );
+				}
+			}
+
+			if( task.plug()->direction() != Plug::Out )
+			{
+				return nullptr;
+			}
+
 			// Acquire a batch with this task placed in it,
 			// and check that we haven't discovered a cyclic
 			// dependency.
@@ -375,7 +449,10 @@ class Dispatcher::Batcher
 			TaskBatches postBatches;
 			for( TaskNode::Tasks::const_iterator it = postTasks.begin(); it != postTasks.end(); ++it )
 			{
-				postBatches.push_back( batchTasksWalk( *it ) );
+				if( auto postBatch = batchTasksWalk( *it ) )
+				{
+					postBatches.push_back( postBatch );
+				}
 			}
 
 			// Collect all the batches the preTasks belong in,
@@ -390,7 +467,10 @@ class Dispatcher::Batcher
 
 			for( TaskNode::Tasks::const_iterator it = preTasks.begin(); it != preTasks.end(); ++it )
 			{
-				addPreTask( batch.get(), batchTasksWalk( *it, preTaskAncestors ) );
+				if( auto preBatch = batchTasksWalk( *it, preTaskAncestors ) )
+				{
+					addPreTask( batch.get(), preBatch );
+				}
 			}
 
 			// As far as TaskBatch and doDispatch() are concerned, there
@@ -411,19 +491,25 @@ class Dispatcher::Batcher
 		{
 			// See if we've previously visited this task, and therefore
 			// have placed it in a batch already, which we can return
-			// unchanged. The `taskToBatchMapHash` is used as the unique
-			// identity of a task.
-			MurmurHash taskToBatchMapHash = task.hash();
-			// Prevent identical tasks from different nodes from being
-			// coalesced.
-			taskToBatchMapHash.append( (uint64_t)task.node() );
-			if( task.hash() == IECore::MurmurHash() )
+			// unchanged. The `taskHash` is used as the unique identity of
+			// the task.
+			MurmurHash taskHash;
+			{
+				Context::Scope scopedTaskContext( task.context() );
+				taskHash = task.plug()->hash();
+			}
+			const bool taskIsNoOp = taskHash == IECore::MurmurHash();
+			if( taskIsNoOp )
 			{
 				// Prevent no-ops from coalescing into a single batch, as this
 				// would break parallelism - see `DispatcherTest.testNoOpDoesntBreakFrameParallelism()`
-				taskToBatchMapHash.append( contextHash( task.context() ) );
+				taskHash.append( contextHash( task.context() ) );
 			}
-			const TaskToBatchMap::const_iterator it = m_tasksToBatches.find( taskToBatchMapHash );
+			// Prevent identical tasks from different nodes from being
+			// coalesced.
+			taskHash.append( (uint64_t)task.plug() );
+
+			const TaskToBatchMap::const_iterator it = m_tasksToBatches.find( taskHash );
 			if( it != m_tasksToBatches.end() )
 			{
 				return it->second;
@@ -445,7 +531,7 @@ class Dispatcher::Batcher
 				// Unfortunately we have to track batch size separately from `batch->frames().size()`,
 				// because no-ops don't update `frames()`, but _do_ count towards batch size.
 				IntDataPtr batchSizeData = candidateBatch->blindData()->member<IntData>( g_sizeBlindDataName );
-				const IntPlug *batchSizePlug = task.node()->dispatcherPlug()->getChild<const IntPlug>( g_batchSize );
+				const IntPlug *batchSizePlug = dispatcherPlug( task )->getChild<const IntPlug>( g_batchSize );
 				const int batchSizeLimit = ( batchSizePlug ) ? batchSizePlug->getValue() : 1;
 				if( requiresSequenceExecution || ( batchSizeData->readable() < batchSizeLimit ) )
 				{
@@ -464,7 +550,7 @@ class Dispatcher::Batcher
 			// Now we have an appropriate batch, update it to include
 			// the frame for our task, and any other relevant information.
 
-			if( task.hash() != MurmurHash() )
+			if( !taskIsNoOp )
 			{
 				float frame = task.context()->getFrame();
 				std::vector<float> &frames = batch->frames();
@@ -478,7 +564,7 @@ class Dispatcher::Batcher
 				}
 			}
 
-			const BoolPlug *immediatePlug = task.node()->dispatcherPlug()->getChild<const BoolPlug>( g_immediatePlugName );
+			const BoolPlug *immediatePlug = dispatcherPlug( task )->getChild<const BoolPlug>( g_immediatePlugName );
 			if( immediatePlug && immediatePlug->getValue() )
 			{
 				/// \todo Should we be scoping a context for this, to allow the plug to
@@ -490,7 +576,7 @@ class Dispatcher::Batcher
 
 			// Remember which batch we stored this task in, for
 			// the next time someone asks for it.
-			m_tasksToBatches[taskToBatchMapHash] = batch;
+			m_tasksToBatches[taskHash] = batch;
 
 			return batch;
 		}
@@ -501,7 +587,7 @@ class Dispatcher::Batcher
 		IECore::MurmurHash batchHash( const TaskNode::Task &task )
 		{
 			MurmurHash result;
-			result.append( (uint64_t)task.node() );
+			result.append( (uint64_t)task.plug() );
 			// We ignore the frame because the whole point of batching
 			// is to allow multiple frames to be placed in the same
 			// batch if the context is otherwise identical.
@@ -561,6 +647,11 @@ class Dispatcher::Batcher
 					preTasks.push_back( preTask );
 				}
 			}
+		}
+
+		const Gaffer::Plug *dispatcherPlug( const TaskNode::Task &task )
+		{
+			return static_cast<const TaskNode *>( task.plug()->node() )->dispatcherPlug();
 		}
 
 		typedef std::map<IECore::MurmurHash, TaskBatchPtr> BatchMap;
@@ -661,11 +752,13 @@ void Dispatcher::dispatch( const std::vector<NodePtr> &nodes ) const
 		}
 	}
 
-	Context::EditableScope jobScope( Context::current() );
 	// create the job directory now, so it's available in preDispatchSignal().
-	/// \todo: move directory creation between preDispatchSignal() and dispatchSignal()
-	m_jobDirectory = createJobDirectory( Context::current() );
-	jobScope.set( g_jobDirectoryContextEntry, m_jobDirectory );
+	/// \todo: move directory creation between preDispatchSignal() and dispatchSignal() - a cancelled
+	/// dispatch should not create anything on disk.
+
+	ContextPtr jobContext = new Context( *Context::current() );
+	Context::Scope jobScope( jobContext.get() );
+	createJobDirectory( script, jobContext.get() );
 
 	// this object calls this->preDispatchSignal() in its constructor and this->postDispatchSignal()
 	// in its destructor, thereby guaranteeing that we always call this->postDispatchSignal().
@@ -687,12 +780,37 @@ void Dispatcher::dispatch( const std::vector<NodePtr> &nodes ) const
 	{
 		for( std::vector<TaskNodePtr>::const_iterator nIt = taskNodes.begin(); nIt != taskNodes.end(); ++nIt )
 		{
-			jobScope.setFrame( *fIt );
+			jobContext->setFrame( *fIt );
 			batcher.addTask( TaskNode::Task( *nIt, Context::current() ) );
 		}
 	}
 
 	executeAndPruneImmediateBatches( batcher.rootBatch() );
+
+	// Save the script. If we're in a nested dispatch, this may have been done already by
+	// the outer dispatch, hence the call to `exists()`. Performing the saving here is
+	// unsatisfactory for a couple of reasons :
+	//
+	// - It is _after_ the execution of immediate tasks because currently at Image Engine, some immediate tasks
+	//   modify the node graph and expect those modifications to be saved in the script. This is definitely
+	//   not kosher - `TaskNode::execute()` is `const` for a reason, and TaskNodes should never modify the graph.
+	//   Among other things, such rogue nodes preclude us from being able to multithread dispatch in the future.
+	//   Nevertheless, we need to continue to support this for now.
+	// - Some dispatchers don't need the script to be saved at all, or even need a job directory (a LocalDispatcher
+	//   in foreground mode for instance). We would prefer not to litter the filesystem in these cases.
+	//
+	// One solution may be to defer the creation of the job directory and the script until it is
+	// first required, either by `doDispatch()` or a TaskNode. We'd do this by creating the
+	// "dispatcher:jobDirectory" and "dispatcher:scriptFileName" context variables upfront as normal,
+	// but not actually updating the filesystem until a call to a utility method is made. The main issue
+	// to resolve there is the generation of a unique directory name without actually creating the
+	// directory. We could use some sort of UUID for this, but there is some concern that this will be less
+	// useable/friendly than the existing sequential naming.
+	const std::string scriptFileName = jobContext->get<string>( g_scriptFileNameContextEntry );
+	if( !boost::filesystem::exists( scriptFileName ) )
+	{
+		script->serialiseToFile( scriptFileName );
+	}
 
 	if( !batcher.rootBatch()->preTasks().empty() )
 	{

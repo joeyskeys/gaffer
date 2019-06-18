@@ -49,5 +49,21 @@ def __tweakPlugAddChild( originalAddChild ) :
 
 GafferScene.TweakPlug.addChild = __tweakPlugAddChild( GafferScene.TweakPlug.addChild )
 
-# Compatibility with old TweakPlug that was part of LightTweaks
+# Compatibility for old LightTweaks nodes
+
+class LightTweaks( GafferScene.ShaderTweaks ) :
+
+	def __init__( self, name = "LightTweaks" ) :
+
+		GafferScene.ShaderTweaks.__init__( self, name )
+		self["shader"].setValue( "light *:light" )
+
+	def __getitem__( self, key ) :
+
+		if key == "type" :
+			key = "shader"
+
+		return GafferScene.ShaderTweaks.__getitem__( self, key )
+
+GafferScene.LightTweaks = LightTweaks
 GafferScene.LightTweaks.TweakPlug = GafferScene.TweakPlug

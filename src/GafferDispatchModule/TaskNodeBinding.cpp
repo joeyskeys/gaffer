@@ -59,12 +59,6 @@ using namespace GafferDispatchBindings;
 namespace
 {
 
-unsigned long taskHash( const TaskNode::Task &t )
-{
-	const IECore::MurmurHash h = t.hash();
-	return tbb::tbb_hasher( h.toString() );
-}
-
 ContextPtr taskContext( const TaskNode::Task &t, bool copy = true )
 {
 	if ( ConstContextPtr context = t.context() )
@@ -80,14 +74,9 @@ ContextPtr taskContext( const TaskNode::Task &t, bool copy = true )
 	return nullptr;
 }
 
-TaskNodePtr taskNode( const TaskNode::Task &t )
+TaskNode::TaskPlugPtr taskPlug( const TaskNode::Task &t )
 {
-	if ( ConstTaskNodePtr node = t.node() )
-	{
-		return boost::const_pointer_cast<TaskNode>( node );
-	}
-
-	return nullptr;
+	return const_cast<TaskNode::TaskPlug *>( t.plug() );
 }
 
 IECore::MurmurHash taskPlugHash( const TaskNode::TaskPlug &t )
@@ -150,11 +139,11 @@ void GafferDispatchModule::bindTaskNode()
 
 	class_<TaskNode::Task>( "Task", no_init )
 		.def( init<TaskNode::Task>() )
+		.def( init<GafferDispatch::TaskNode::TaskPlugPtr, const Gaffer::Context *>() )
 		.def( init<GafferDispatch::TaskNodePtr, const Gaffer::Context *>() )
-		.def( "node", &taskNode )
+		.def( "plug", &taskPlug )
 		.def( "context", &taskContext, ( boost::python::arg_( "_copy" ) = true ) )
 		.def("__eq__", &TaskNode::Task::operator== )
-		.def("__hash__", &taskHash )
 	;
 
 	PlugClass<TaskNode::TaskPlug>()

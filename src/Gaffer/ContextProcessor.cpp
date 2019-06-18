@@ -37,6 +37,7 @@
 
 #include "Gaffer/ContextProcessor.h"
 
+#include "Gaffer/ContextAlgo.h"
 #include "Gaffer/MetadataAlgo.h"
 #include "Gaffer/ValuePlug.h"
 
@@ -44,6 +45,23 @@ using namespace Gaffer;
 
 static IECore::InternedString g_inPlugName( "in" );
 static IECore::InternedString g_outPlugName( "out" );
+
+class ContextProcessor::ProcessedScope : public Context::EditableScope
+{
+
+	public :
+
+		ProcessedScope( const Context *context, const ContextProcessor *processor )
+			:	EditableScope( context )
+		{
+			ContextAlgo::GlobalScope globalScope( context, processor->inPlug() );
+			if( processor->enabledPlug()->getValue() )
+			{
+				processor->processContext( *this );
+			}
+		}
+
+};
 
 IE_CORE_DEFINERUNTIMETYPED( ContextProcessor );
 
@@ -60,7 +78,7 @@ ContextProcessor::~ContextProcessor()
 {
 }
 
-void ContextProcessor::setup( const ValuePlug *plug )
+void ContextProcessor::setup( const Plug *plug )
 {
 	if( inPlug() )
 	{
@@ -73,33 +91,32 @@ void ContextProcessor::setup( const ValuePlug *plug )
 
 	PlugPtr in = plug->createCounterpart( g_inPlugName, Plug::In );
 	MetadataAlgo::copyColors( plug , in.get() , /* overwrite = */ false  );
-	in->setFlags( Plug::Dynamic | Plug::Serialisable, true );
+	in->setFlags( Plug::Serialisable, true );
 	addChild( in );
 
 	PlugPtr out = plug->createCounterpart( g_outPlugName, Plug::Out );
 	MetadataAlgo::copyColors( plug , out.get() , /* overwrite = */ false  );
-	out->setFlags( Plug::Dynamic | Plug::Serialisable, true );
 	addChild( out );
 }
 
-ValuePlug *ContextProcessor::inPlug()
+Plug *ContextProcessor::inPlug()
 {
-	return getChild<ValuePlug>( g_inPlugName );
+	return getChild<Plug>( g_inPlugName );
 }
 
-const ValuePlug *ContextProcessor::inPlug() const
+const Plug *ContextProcessor::inPlug() const
 {
-	return getChild<ValuePlug>( g_inPlugName );
+	return getChild<Plug>( g_inPlugName );
 }
 
-ValuePlug *ContextProcessor::outPlug()
+Plug *ContextProcessor::outPlug()
 {
-	return getChild<ValuePlug>( g_outPlugName );
+	return getChild<Plug>( g_outPlugName );
 }
 
-const ValuePlug *ContextProcessor::outPlug() const
+const Plug *ContextProcessor::outPlug() const
 {
-	return getChild<ValuePlug>( g_outPlugName );
+	return getChild<Plug>( g_outPlugName );
 }
 
 BoolPlug *ContextProcessor::enabledPlug()
@@ -136,13 +153,9 @@ void ContextProcessor::affects( const Plug *input, DependencyNode::AffectedPlugs
 
 	if( input->direction() == Plug::In )
 	{
-		if( const ValuePlug *inputValuePlug = IECore::runTimeCast<const ValuePlug>( input ) )
+		if( const Plug *output = oppositePlug( input ) )
 		{
-			const ValuePlug *output = oppositePlug( inputValuePlug );
-			if( output )
-			{
-				outputs.push_back( output );
-			}
+			outputs.push_back( output );
 		}
 	}
 
@@ -168,21 +181,19 @@ void ContextProcessor::affects( const Plug *input, DependencyNode::AffectedPlugs
 	}
 }
 
+ContextPtr ContextProcessor::inPlugContext() const
+{
+	ProcessedScope processedScope( Context::current(), this );
+	return new Context( *processedScope.context() );
+}
+
 void ContextProcessor::hash( const ValuePlug *output, const Context *context, IECore::MurmurHash &h ) const
 {
-	const ValuePlug *input = oppositePlug( output );
+	auto input = IECore::runTimeCast<const ValuePlug>( oppositePlug( output ) );
 	if( input )
 	{
-		if( enabledPlug()->getValue() )
-		{
-			Context::EditableScope scope( context );
-			processContext( scope );
-			h = input->hash();
-		}
-		else
-		{
-			h = input->hash();
-		}
+		ProcessedScope processedScope( context, this );
+		h = input->hash();
 		return;
 	}
 
@@ -191,26 +202,18 @@ void ContextProcessor::hash( const ValuePlug *output, const Context *context, IE
 
 void ContextProcessor::compute( ValuePlug *output, const Context *context ) const
 {
-	const ValuePlug *input = oppositePlug( output );
+	auto input = IECore::runTimeCast<const ValuePlug>( oppositePlug( output ) );
 	if( input )
 	{
-		if( enabledPlug()->getValue() )
-		{
-			Context::EditableScope scope( context );
-			processContext( scope );
-			output->setFrom( input );
-		}
-		else
-		{
-			output->setFrom( input );
-		}
+		ProcessedScope processedScope( context, this );
+		output->setFrom( input );
 		return;
 	}
 
 	return ComputeNode::compute( output, context );
 }
 
-const ValuePlug *ContextProcessor::correspondingDescendant( const ValuePlug *plug, const ValuePlug *plugAncestor, const ValuePlug *oppositeAncestor )
+const Plug *ContextProcessor::correspondingDescendant( const Plug *plug, const Plug *plugAncestor, const Plug *oppositeAncestor )
 {
 	// this method recursively computes oppositeAncestor->descendant( plug->relativeName( plugAncestor ) ).
 	// ie it finds the relative path from plugAncestor to plug, and follows it from oppositeAncestor.
@@ -226,7 +229,7 @@ const ValuePlug *ContextProcessor::correspondingDescendant( const ValuePlug *plu
 	// return its child with the same name as "plug" (if either of those things exist):
 
 	// get parent of this plug:
-	const ValuePlug *plugParent = plug->parent<ValuePlug>();
+	const Plug *plugParent = plug->parent<Plug>();
 	if( !plugParent )
 	{
 		// looks like the "plug" we initially called this function with wasn't
@@ -236,7 +239,7 @@ const ValuePlug *ContextProcessor::correspondingDescendant( const ValuePlug *plu
 	}
 
 	// find the corresponding plug for the parent:
-	const ValuePlug *oppositeParent = correspondingDescendant( plugParent, plugAncestor, oppositeAncestor );
+	const Plug *oppositeParent = correspondingDescendant( plugParent, plugAncestor, oppositeAncestor );
 	if( !oppositeParent )
 	{
 		return nullptr;
@@ -246,10 +249,10 @@ const ValuePlug *ContextProcessor::correspondingDescendant( const ValuePlug *plu
 	return oppositeParent->getChild<ValuePlug>( plug->getName() );
 }
 
-const ValuePlug *ContextProcessor::oppositePlug( const ValuePlug *plug ) const
+const Plug *ContextProcessor::oppositePlug( const Plug *plug ) const
 {
-	const ValuePlug *inPlug = this->inPlug();
-	const ValuePlug *outPlug = this->outPlug();
+	const Plug *inPlug = this->inPlug();
+	const Plug *outPlug = this->outPlug();
 
 	if( !( outPlug && inPlug ) )
 	{

@@ -44,6 +44,7 @@
 #include "IECore/SimpleTypedData.h"
 
 using namespace GafferUI;
+using namespace IECore;
 using namespace Imath;
 using namespace std;
 
@@ -66,6 +67,16 @@ Gaffer::Plug *Nodule::plug()
 const Gaffer::Plug *Nodule::plug() const
 {
 	return m_plug.get();
+}
+
+Nodule *Nodule::nodule( const Gaffer::Plug *plug )
+{
+	return nullptr;
+}
+
+const Nodule *Nodule::nodule( const Gaffer::Plug *plug ) const
+{
+	return nullptr;
 }
 
 void Nodule::updateDragEndPoint( const Imath::V3f position, const Imath::V3f &tangent )
@@ -143,11 +154,10 @@ std::string Nodule::getToolTip( const IECore::LineSegment3f &line ) const
 		result = m_plug->relativeName( node->parent<Gaffer::GraphComponent>() );
 	}
 
-	result = "<h3>" + result + "</h3>";
-	std::string description = Gaffer::Metadata::plugDescription( m_plug.get() );
-	if( description.size() )
+	result = "# " + result;
+	if( ConstStringDataPtr description = Gaffer::Metadata::value<StringData>( m_plug.get(), "description" ) )
 	{
-		result += "\n\n" + description;
+		result += "\n\n" + description->readable();
 	}
 
 	return result;

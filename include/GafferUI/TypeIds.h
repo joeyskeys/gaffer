@@ -65,7 +65,7 @@ enum TypeId
 	ViewportGadgetTypeId = 110270,
 	ViewTypeId = 110271,
 	ConnectionCreatorTypeId = 110272,
-	ObjectViewTypeId = 110273, // Obsolete - available for reuse
+	CompoundNumericNoduleTypeId = 110273,
 	PlugGadgetTypeId = 110274,
 	GraphLayoutTypeId = 110275,
 	StandardGraphLayoutTypeId = 110276,
@@ -81,6 +81,7 @@ enum TypeId
 	ScaleHandleTypeId = 110286,
 	RotateHandleTypeId = 110287,
 	AnimationGadgetTypeId = 110288,
+	AnnotationsGadgetTypeId = 110289,
 
 	LastTypeId = 110450
 };

@@ -48,8 +48,6 @@
 #include "Gaffer/Animation.h"
 #include "Gaffer/Metadata.h"
 #include "Gaffer/MetadataAlgo.h"
-#include "Gaffer/Monitor.h"
-#include "Gaffer/Process.h"
 #include "Gaffer/ScriptNode.h"
 
 #include "OpenEXR/ImathMatrixAlgo.h"
@@ -57,8 +55,6 @@
 #include "boost/algorithm/string/predicate.hpp"
 #include "boost/bind.hpp"
 #include "boost/unordered_map.hpp"
-
-#include "tbb/spin_mutex.h"
 
 #include <memory>
 #include <unordered_set>
@@ -92,124 +88,15 @@ bool ancestorMakesChildNodesReadOnly( const Node *node )
 	return false;
 }
 
-struct CapturedProcess
+bool updateSelection( const SceneAlgo::History *history, TransformTool::Selection &selection )
 {
-
-	typedef std::unique_ptr<CapturedProcess> Ptr;
-	typedef vector<Ptr> PtrVector;
-
-	InternedString type;
-	ConstPlugPtr plug;
-	ContextPtr context;
-
-	PtrVector children;
-
-};
-
-/// \todo Perhaps add this to the Gaffer module as a
-/// public class, and expose it within the stats app?
-/// Give a bit more thought to the CapturedProcess
-/// class if doing this.
-class CapturingMonitor : public Monitor
-{
-
-	public :
-
-		CapturingMonitor()
-		{
-		}
-
-		~CapturingMonitor() override
-		{
-		}
-
-		const CapturedProcess::PtrVector &rootProcesses()
-		{
-			return m_rootProcesses;
-		}
-
-	protected :
-
-		void processStarted( const Process *process ) override
-		{
-			CapturedProcess::Ptr capturedProcess( new CapturedProcess );
-			capturedProcess->type = process->type();
-			capturedProcess->plug = process->plug();
-			capturedProcess->context = new Context( *process->context() );
-
-			Mutex::scoped_lock lock( m_mutex );
-
-			m_processMap[process] = capturedProcess.get();
-
-			if( process->parent() )
-			{
-				ProcessMap::const_iterator it = m_processMap.find( process->parent() );
-				if( it != m_processMap.end() )
-				{
-					it->second->children.push_back( std::move( capturedProcess ) );
-				}
-				else
-				{
-					// We've been called for a process whose parent we have not
-					// been called for. This shouldn't happen, but currently it
-					// can if another thread is doing unrelated computes while we're
-					// trying to capture the transform computes on the UI thread.
-					// We need our scope to be limited to processes that originate
-					// from the thread our Process::Scope is on, but that is not the
-					// case (see #2806). The best we can do is ignore this, but we
-					// could still crash if a background process accesses us after
-					// we're destroyed. Output a warning so we have a trail of
-					// breadcrumbs for the future.
-					IECore::msg( IECore::Msg::Warning, "CapturingMonitor", "Unscoped process encountered" );
-				}
-			}
-			else
-			{
-				m_rootProcesses.push_back( std::move( capturedProcess ) );
-			}
-		}
-
-		void processFinished( const Process *process ) override
-		{
-			Mutex::scoped_lock lock( m_mutex );
-			m_processMap.erase( process );
-		}
-
-	private :
-
-		typedef tbb::spin_mutex Mutex;
-
-		Mutex m_mutex;
-		typedef boost::unordered_map<const Process *, CapturedProcess *> ProcessMap;
-		ProcessMap m_processMap;
-		CapturedProcess::PtrVector m_rootProcesses;
-
-};
-
-InternedString g_contextUniquefierName = "transformTool:uniquefier";
-uint64_t g_contextUniquefierValue = 0;
-
-bool updateSelection( const CapturedProcess *process, TransformTool::Selection &selection )
-{
-	const M44fPlug *matrixPlug = runTimeCast<const M44fPlug>( process->plug.get() );
-	if( !matrixPlug )
-	{
-		return false;
-	}
-
-	const ScenePlug *scenePlug = matrixPlug->parent<ScenePlug>();
-	if( !scenePlug )
-	{
-		return false;
-	}
-
-	const SceneNode *node = runTimeCast<const SceneNode>( scenePlug->node() );
+	const SceneNode *node = runTimeCast<const SceneNode>( history->scene->node() );
 	if( !node )
 	{
 		return false;
 	}
 
-	Context::Scope scopedContext( process->context.get() );
+	Context::Scope scopedContext( history->context.get() );
 	if( !node->enabledPlug()->getValue() )
 	{
 		return false;
@@ -222,7 +109,7 @@ bool updateSelection( const CapturedProcess *process, TransformTool::Selection &
 	}
 	else if( const Group *group = runTimeCast<const Group>( node ) )
 	{
-		const ScenePlug::ScenePath &path = process->context->get<ScenePlug::ScenePath>( ScenePlug::scenePathContextName );
+		const ScenePlug::ScenePath &path = history->context->get<ScenePlug::ScenePath>( ScenePlug::scenePathContextName );
 		if( path.size() == 1 )
 		{
 			selection.transformPlug = const_cast<TransformPlug *>( group->transformPlug() );
@@ -234,7 +121,7 @@ bool updateSelection( const CapturedProcess *process, TransformTool::Selection &
 		if( transform->filterPlug()->getValue() & PathMatcher::ExactMatch )
 		{
 			selection.transformPlug = const_cast<TransformPlug *>( transform->transformPlug() );
-			ScenePlug::ScenePath spacePath = process->context->get<ScenePlug::ScenePath>( ScenePlug::scenePathContextName );
+			ScenePlug::ScenePath spacePath = history->context->get<ScenePlug::ScenePath>( ScenePlug::scenePathContextName );
 			switch( (GafferScene::Transform::Space)transform->spacePlug()->getValue() )
 			{
 				case GafferScene::Transform::Local :
@@ -253,7 +140,7 @@ bool updateSelection( const CapturedProcess *process, TransformTool::Selection &
 	}
 	else if( const GafferScene::SceneReader *sceneReader = runTimeCast<const GafferScene::SceneReader>( node ) )
 	{
-		const ScenePlug::ScenePath &path = process->context->get<ScenePlug::ScenePath>( ScenePlug::scenePathContextName );
+		const ScenePlug::ScenePath &path = history->context->get<ScenePlug::ScenePath>( ScenePlug::scenePathContextName );
 		if( path.size() == 1 )
 		{
 			selection.transformPlug = const_cast<TransformPlug *>( sceneReader->transformPlug() );
@@ -272,28 +159,30 @@ bool updateSelection( const CapturedProcess *process, TransformTool::Selection &
 			selection.transformPlug = nullptr;
 			return false;
 		}
-		selection.upstreamScene = scenePlug;
-		selection.upstreamPath = process->context->get<ScenePlug::ScenePath>( ScenePlug::scenePathContextName );
-		selection.upstreamContext = process->context;
+		selection.upstreamScene = history->scene;
+		selection.upstreamPath = history->context->get<ScenePlug::ScenePath>( ScenePlug::scenePathContextName );
+		selection.upstreamContext = history->context;
 		return true;
 	}
 
 	return false;
 }
 
-bool updateSelectionWalk( const CapturedProcess::PtrVector &processes, TransformTool::Selection &selection )
+bool updateSelectionWalk( const SceneAlgo::History *history, TransformTool::Selection &selection )
 {
-	for( CapturedProcess::PtrVector::const_iterator it = processes.begin(), eIt = processes.end(); it != eIt; ++it )
+	if( updateSelection( history, selection ) )
 	{
-		if( updateSelection( it->get(), selection ) )
-		{
-			return true;
-		}
-		if( updateSelectionWalk( (*it)->children, selection ) )
+		return true;
+	}
+
+	for( const auto &p : history->predecessors )
+	{
+		if( updateSelectionWalk( p.get(), selection ) )
 		{
 			return true;
 		}
 	}
+
 	return false;
 }
 
@@ -359,21 +248,8 @@ TransformTool::Selection::Selection(
 		return;
 	}
 
-	// Do an evaluation of the transform hash for our selection,
-	// using a monitor to capture the upstream processes it triggers.
-	CapturingMonitor monitor;
-	{
-		Monitor::Scope scopedMonitor( &monitor );
-		ScenePlug::PathScope pathScope( context.get(), path );
-		// Trick to bypass the hash cache and get a full upstream evaluation.
-		pathScope.set( g_contextUniquefierName, g_contextUniquefierValue++ );
-		scene->transformPlug()->hash();
-	}
-
-	// Iterate over the captured processes to update the selection with
-	// the upstream transform plug we want to edit.
-
-	updateSelectionWalk( monitor.rootProcesses(), *this );
+	SceneAlgo::History::Ptr history = SceneAlgo::history( scene->transformPlug(), path );
+	updateSelectionWalk( history.get(), *this );
 }
 
 Imath::M44f TransformTool::Selection::sceneToTransformSpace() const
@@ -449,10 +325,12 @@ TransformTool::TransformTool( SceneView *view, const std::string &name )
 		m_handles( new HandlesGadget() ),
 		m_handlesDirty( true ),
 		m_selectionDirty( true ),
+		m_priorityPathsDirty( true ),
 		m_dragging( false ),
 		m_mergeGroupId( 0 )
 {
 	view->viewportGadget()->addChild( m_handles );
+	m_handles->setVisible( false );
 
 	storeIndexOfNextChild( g_firstPlugIndex );
 
@@ -461,7 +339,6 @@ TransformTool::TransformTool( SceneView *view, const std::string &name )
 
 	scenePlug()->setInput( view->inPlug<ScenePlug>() );
 
-	view->viewportGadget()->preRenderSignal().connect( boost::bind( &TransformTool::preRender, this ) );
 	view->viewportGadget()->keyPressSignal().connect( boost::bind( &TransformTool::keyPress, this, ::_2 ) );
 	plugDirtiedSignal().connect( boost::bind( &TransformTool::plugDirtied, this, ::_1 ) );
 
@@ -555,6 +432,7 @@ void TransformTool::contextChanged( const IECore::InternedString &name )
 		m_selectionDirty = true;
 		selectionChangedSignal()( *this );
 		m_handlesDirty = true;
+		m_priorityPathsDirty = true;
 	}
 }
 
@@ -575,6 +453,7 @@ void TransformTool::plugDirtied( const Gaffer::Plug *plug )
 			selectionChangedSignal()( *this );
 		}
 		m_handlesDirty = true;
+		m_priorityPathsDirty = true;
 	}
 	else if( plug == sizePlug() )
 	{
@@ -587,6 +466,21 @@ void TransformTool::plugDirtied( const Gaffer::Plug *plug )
 	if( affectsHandles( plug ) )
 	{
 		m_handlesDirty = true;
+	}
+
+	if( plug == activePlug() )
+	{
+		if( activePlug()->getValue() )
+		{
+			m_preRenderConnection = view()->viewportGadget()->preRenderSignal().connect( boost::bind( &TransformTool::preRender, this ) );
+		}
+		else
+		{
+			m_preRenderConnection.disconnect();
+			m_handles->setVisible( false );
+			SceneGadget *sceneGadget = static_cast<SceneGadget *>( view()->viewportGadget()->getPrimaryChild() );
+			sceneGadget->setPriorityPaths( IECore::PathMatcher() );
+		}
 	}
 }
 
@@ -648,11 +542,9 @@ void TransformTool::updateSelection() const
 		return;
 	}
 
-	const ScenePlug::ScenePath lastSelectedPath = ContextAlgo::getLastSelectedPath( view()->getContext() );
+	ScenePlug::ScenePath lastSelectedPath = ContextAlgo::getLastSelectedPath( view()->getContext() );
 	assert( selectedPaths.match( lastSelectedPath ) & IECore::PathMatcher::ExactMatch );
 
-	Selection lastSelection;
-	std::unordered_set<Gaffer::TransformPlug *> transformPlugs;
 	for( PathMatcher::Iterator it = selectedPaths.begin(), eIt = selectedPaths.end(); it != eIt; ++it )
 	{
 		ScenePlug::ScenePath path = *it;
@@ -665,20 +557,10 @@ void TransformTool::updateSelection() const
 
 		if( selection.transformPlug )
 		{
-			// Selection is editable, but it's possible that we've already added it
-			// (multiple paths may originate from the same node). We use the `transformPlugs`
-			// set to ensure we only include any plug in the selection once.
-			if( transformPlugs.insert( selection.transformPlug.get() ).second )
+			m_selection.push_back( selection );
+			if( *it == lastSelectedPath )
 			{
-				if( *it != lastSelectedPath )
-				{
-					m_selection.push_back( selection );
-				}
-				else
-				{
-					// We'll push this back last, outside the loop
-					lastSelection = selection;
-				}
+				lastSelectedPath = selection.path;
 			}
 		}
 		else
@@ -689,8 +571,65 @@ void TransformTool::updateSelection() const
 		}
 	}
 
-	assert( lastSelection.transformPlug );
-	m_selection.push_back( lastSelection );
+	// Multiple selected paths may have transforms originating from
+	// the same node, in which case we need to remove duplicates from
+	// `m_selection`. We also need to make sure that the selection for
+	// `lastSelectedPath` appears last, and isn't removed by the
+	// deduplication.
+
+	// Sort by `transformPlug`, ensuring `lastSelectedPath` comes first
+	// in its group (so it survives deduplication).
+
+	std::sort(
+		m_selection.begin(), m_selection.end(),
+		[&lastSelectedPath]( const Selection &a, const Selection &b )
+		{
+			if( a.transformPlug.get() < b.transformPlug.get() )
+			{
+				return true;
+			}
+			else if( b.transformPlug.get() > a.transformPlug.get() )
+			{
+				return false;
+			}
+			return ( a.path != lastSelectedPath ) < ( b.path != lastSelectedPath );
+		}
+	);
+
+	// Deduplicate by `transformPlug`.
+
+	auto last = std::unique(
+		m_selection.begin(), m_selection.end(),
+		[]( const Selection &a, const Selection &b )
+		{
+			return a.transformPlug == b.transformPlug;
+		}
+	);
+	m_selection.erase( last, m_selection.end() );
+
+	// Move `lastSelectedPath` to the end
+
+	auto lastSelectedIt = std::find_if(
+		m_selection.begin(), m_selection.end(),
+		[&lastSelectedPath]( const Selection &x )
+		{
+			return x.path == lastSelectedPath;
+		}
+	);
+
+	if( lastSelectedIt != m_selection.end() )
+	{
+		std::swap( m_selection.back(), *lastSelectedIt );
+	}
+	else
+	{
+		// We shouldn't get here, because ContextAlgo guarantees that lastSelectedPath is
+		// contained in selectedPaths, and we've preserved lastSelectedPath through our
+		// uniquefication process. But we could conceivably get here if an extension has
+		// edited "ui:scene:selectedPaths" directly instead of using ContextAlgo,
+		// in which case we emit a warning instead of crashing.
+		IECore::msg( IECore::Msg::Warning, "TransformTool::updateSelection", "Last selected path not included in selection" );
+	}
 }
 
 void TransformTool::preRender()
@@ -704,6 +643,19 @@ void TransformTool::preRender()
 		// and also that it would be very confusing for the edited plug to be
 		// changed mid-drag.
 		updateSelection();
+		if( m_priorityPathsDirty )
+		{
+			m_priorityPathsDirty = false;
+			SceneGadget *sceneGadget = static_cast<SceneGadget *>( view()->viewportGadget()->getPrimaryChild() );
+			if( selection().size() )
+			{
+				sceneGadget->setPriorityPaths( ContextAlgo::getSelectedPaths( view()->getContext() ) );
+			}
+			else
+			{
+				sceneGadget->setPriorityPaths( IECore::PathMatcher() );
+			}
+		}
 	}
 
 	if( m_selection.empty() )

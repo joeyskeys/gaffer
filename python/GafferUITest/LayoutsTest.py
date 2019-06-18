@@ -84,20 +84,7 @@ class LayoutsTest( GafferUITest.TestCase ) :
 
 	def testNoPersistentLayoutsInDefaultConfigs( self ) :
 
-		class TestApp( Gaffer.Application ) :
-
-			def __init__( self ) :
-
-				Gaffer.Application.__init__( self, "Test" )
-
-			def _run( self, args ) :
-
-				# Load the standard gui config files
-				self._executeStartupFiles( "gui" )
-
-				return 0
-
-		app = TestApp()
+		app = Gaffer.Application()
 
 		# Load the GUI config, making sure we only use the standard
 		# startup files, and not any others from the current environment
@@ -105,7 +92,7 @@ class LayoutsTest( GafferUITest.TestCase ) :
 		startupPaths = os.environ["GAFFER_STARTUP_PATHS"]
 		try :
 			os.environ["GAFFER_STARTUP_PATHS"] = os.path.expandvars( "$GAFFER_ROOT/startup" )
-			app.run()
+			app._executeStartupFiles( "gui" )
 		finally :
 			os.environ["GAFFER_STARTUP_PATHS"] = startupPaths
 
@@ -114,6 +101,43 @@ class LayoutsTest( GafferUITest.TestCase ) :
 		layouts = GafferUI.Layouts.acquire( app )
 		self.assertEqual( layouts.names( persistent = True ), [] )
 		self.assertGreater( len( layouts.names() ), 0 )
+
+	def testRestore( self ) :
+
+		s = Gaffer.ScriptNode()
+		c = GafferUI.CompoundEditor( s )
+
+		editors = list((
+			GafferUI.NodeEditor( s ),
+			GafferUI.AnimationEditor( s ),
+			GafferUI.GraphEditor( s ),
+			GafferUI.PythonEditor( s )
+		))
+
+		editorTypes = [ type(e) for e in editors ]
+
+		for e in editors[:2] :
+			c.addEditor( e )
+
+		p = c._createDetachedPanel()
+
+		for e in editors[2:] :
+			p.addEditor( e )
+
+		self.assertEqual( len(c._detachedPanels()), 1 )
+		self.assertEqual( c.editors(), editors )
+
+		a = Gaffer.ApplicationRoot( "testApp" )
+		l = GafferUI.Layouts.acquire( a )
+		l.add( "ReprTest", repr(c), persistent = False )
+
+		cc = l.create( "ReprTest", s )
+
+		self.assertEqual( len(cc._detachedPanels()), 1 )
+
+		ct = [ type(e) for e in cc.editors() ]
+		self.assertEqual( ct, editorTypes )
+		self.assertEqual( repr(cc.editors()), repr(editors) )
 
 if __name__ == "__main__":
 	unittest.main()

@@ -36,8 +36,14 @@
 
 #include "GafferScene/TweakPlug.h"
 
+#include "GafferScene/Shader.h"
+
 #include "Gaffer/PlugAlgo.h"
+#include "Gaffer/ScriptNode.h"
 #include "Gaffer/SplinePlug.h"
+
+#include "IECoreScene/ShaderNetwork.h"
+#include "IECoreScene/ShaderNetworkAlgo.h"
 
 #include "IECore/DataAlgo.h"
 #include "IECore/TypeTraits.h"
@@ -45,8 +51,11 @@
 #include "IECore/SplineData.h"
 #include "IECore/StringAlgo.h"
 
+#include <unordered_map>
+
 using namespace std;
 using namespace IECore;
+using namespace IECoreScene;
 using namespace Gaffer;
 using namespace GafferScene;
 
@@ -56,28 +65,31 @@ using namespace GafferScene;
 
 IE_CORE_DEFINERUNTIMETYPED( TweakPlug );
 
-TweakPlug::TweakPlug( const std::string &tweakName, Gaffer::ValuePlugPtr valuePlug, bool enabled )
-	:	TweakPlug( "tweak", In, Default | Dynamic )
+TweakPlug::TweakPlug( const std::string &tweakName, Gaffer::ValuePlugPtr valuePlug, Mode mode, bool enabled )
+	:	TweakPlug( valuePlug, "tweak", In, Default | Dynamic )
 {
-	valuePlug->setName( "value" );
-	valuePlug->setFlags( Dynamic, true );
-	addChild( valuePlug );
-
 	namePlug()->setValue( tweakName );
+	modePlug()->setValue( mode );
 	enabledPlug()->setValue( enabled );
 }
 
-TweakPlug::TweakPlug( const std::string &tweakName, const IECore::Data *value, bool enabled )
-	:	TweakPlug( tweakName, PlugAlgo::createPlugFromData( "value", In, Default | Dynamic, value ), enabled )
+TweakPlug::TweakPlug( const std::string &tweakName, const IECore::Data *value, Mode mode, bool enabled )
+	:	TweakPlug( tweakName, PlugAlgo::createPlugFromData( "value", In, Default | Dynamic, value ), mode, enabled )
 {
 }
 
-TweakPlug::TweakPlug( const std::string &name, Direction direction, unsigned flags )
-	:	Plug( name, direction, flags )
+TweakPlug::TweakPlug( Gaffer::ValuePlugPtr valuePlug, const std::string &name, Direction direction, unsigned flags )
+	:	ValuePlug( name, direction, flags )
 {
 	addChild( new StringPlug( "name" ) );
 	addChild( new BoolPlug( "enabled", Plug::In, true ) );
 	addChild( new IntPlug( "mode", Plug::In, Replace, Replace, Remove ) );
+
+	if( valuePlug )
+	{
+		valuePlug->setName( "value" );
+		addChild( valuePlug );
+	}
 }
 
 Gaffer::StringPlug *TweakPlug::namePlug()
@@ -110,16 +122,24 @@ const Gaffer::IntPlug *TweakPlug::modePlug() const
 	return getChild<IntPlug>( 2 );
 }
 
-template<typename T>
-T *TweakPlug::valuePlug()
+Gaffer::ValuePlug *TweakPlug::valuePlugInternal()
 {
-	return getChild<T>( 3 );
+	if( children().size() <= 3 )
+	{
+		return nullptr;
+	}
+
+	return getChild<ValuePlug>( 3 );
 }
 
-template<typename T>
-const T *TweakPlug::valuePlug() const
+const Gaffer::ValuePlug *TweakPlug::valuePlugInternal() const
 {
-	return getChild<T>( 3 );
+	if( children().size() <= 3 )
+	{
+		return nullptr;
+	}
+
+	return getChild<ValuePlug>( 3 );
 }
 
 bool TweakPlug::acceptsChild( const Gaffer::GraphComponent *potentialChild ) const
@@ -167,11 +187,22 @@ bool TweakPlug::acceptsChild( const Gaffer::GraphComponent *potentialChild ) con
 
 Gaffer::PlugPtr TweakPlug::createCounterpart( const std::string &name, Direction direction ) const
 {
-	PlugPtr result = new TweakPlug( name, direction, getFlags() );
-	for( PlugIterator it( this ); !it.done(); ++it )
+	const Plug *p = valuePlug();
+	PlugPtr plugCounterpart = p->createCounterpart( p->getName(), direction );
+
+	return new TweakPlug( runTimeCast<ValuePlug>( plugCounterpart.get() ), name, direction, getFlags() );
+}
+
+IECore::MurmurHash TweakPlug::hash() const
+{
+	MurmurHash result = ValuePlug::hash();
+
+	const auto shaderOutput = this->shaderOutput();
+	if( shaderOutput.first )
 	{
-		result->addChild( (*it)->createCounterpart( (*it)->getName(), direction ) );
+		shaderOutput.first->attributesHash( shaderOutput.second, result );
 	}
+
 	return result;
 }
 
@@ -209,8 +240,8 @@ template< typename T > struct SupportsArithData : boost::mpl::or_<  TypeTraits::
 class NumericTweak
 {
 public:
-	NumericTweak( IECore::Data *sourceData, TweakPlug::Mode mode, const std::string &parameterName )
-		: m_sourceData( sourceData ), m_mode( mode ), m_parameterName( parameterName )
+	NumericTweak( IECore::Data *sourceData, TweakPlug::Mode mode, const std::string &tweakName )
+		: m_sourceData( sourceData ), m_mode( mode ), m_tweakName( tweakName )
 	{
 	}
 
@@ -239,70 +270,262 @@ public:
 
 	void operator()( Data * data ) const
 	{
-		throw IECore::Exception( boost::str( boost::format( "Cannot apply tweak with mode %s to \"%s\" : Data type %s not supported." ) % modeToString( m_mode ) % m_parameterName % m_sourceData->typeName() ) );
+		throw IECore::Exception( boost::str( boost::format( "Cannot apply tweak with mode %s to \"%s\" : Data type %s not supported." ) % modeToString( m_mode ) % m_tweakName % m_sourceData->typeName() ) );
 	}
 
 private:
-	
+
 	IECore::Data *m_sourceData;
 	TweakPlug::Mode m_mode;
-	const std::string &m_parameterName;
+	const std::string &m_tweakName;
 };
+
+void applyTweakInternal( TweakPlug::Mode mode, const ValuePlug *valuePlug, const std::string &tweakName, const InternedString &parameterName, IECore::CompoundData *parameters, bool requireExists )
+{
+	if( mode == TweakPlug::Remove )
+	{
+		parameters->writable().erase( parameterName );
+		return;
+	}
+
+	Data *parameterValue = parameters->member<Data>( parameterName );
+	DataPtr newData = PlugAlgo::extractDataFromPlug( valuePlug );
+	if( !newData )
+	{
+		throw IECore::Exception(
+			boost::str( boost::format( "Cannot apply tweak to \"%s\" : Value plug has unsupported type \"%s\"" ) % tweakName % valuePlug->typeName() )
+		);
+	}
+	if( parameterValue && parameterValue->typeId() != newData->typeId() )
+	{
+		throw IECore::Exception( boost::str( boost::format( "Cannot apply tweak to \"%s\" : Value of type \"%s\" does not match parameter of type \"%s\"" ) % tweakName % parameterValue->typeName() % newData->typeName() ) );
+	}
+
+	if( mode == TweakPlug::Replace )
+	{
+		if( !parameterValue && requireExists )
+		{
+			throw IECore::Exception( boost::str( boost::format( "Cannot replace parameter \"%s\" which does not exist" ) % tweakName ) );
+		}
+
+		parameters->writable()[parameterName] = newData;
+		return;
+	}
+
+	if( !parameterValue )
+	{
+		throw IECore::Exception( boost::str( boost::format( "Cannot apply tweak with mode %s to \"%s\" : This parameter does not exist" ) % modeToString( mode ) % tweakName ) );
+	}
+
+	NumericTweak t( newData.get(), mode, tweakName );
+	dispatch( parameterValue, t );
+}
 
 } // namespace
 
-void TweakPlug::applyTweak( IECore::CompoundData *parameters, bool requireExists )
+void TweakPlug::applyTweak( IECore::CompoundData *parameters, bool requireExists ) const
 {
 	if( !enabledPlug()->getValue() )
 	{
 		return;
 	}
+
 	const std::string name = namePlug()->getValue();
 	if( name.empty() )
 	{
 		return;
 	}
 
-	Mode mode = static_cast<Mode>( modePlug()->getValue() );
-	if( mode == Remove )
-	{
-		parameters->writable().erase( name );
-		return;
-	}
-
-
-	Data *parameterValue = parameters->member<Data>( name );
-	DataPtr newData = PlugAlgo::extractDataFromPlug( valuePlug<ValuePlug>() );
-	if( !newData )
-	{
-		throw IECore::Exception(
-			boost::str( boost::format( "Cannot apply to tweak to \"%s\" : Value plug has unsupported type \"%s\"" ) % name % valuePlug<ValuePlug>()->typeName() )
-		);
-	}
-	if( parameterValue && parameterValue->typeId() != newData->typeId() )
-	{
-		throw IECore::Exception( boost::str( boost::format( "Cannot apply tweak to \"%s\" : Value of type \"%s\" does not match parameter of type \"%s\"" ) % name % parameterValue->typeName() % newData->typeName() ) );
-	}
-
-	if( mode == Replace )
-	{
-		if( !parameterValue && requireExists )
-		{
-			throw IECore::Exception( boost::str( boost::format( "Cannot replace parameter \"%s\" which does not exist" ) % name ) );
-		}
-		
-		parameters->writable()[name] = newData;
-		return;
-	}
-
-	if( !parameterValue )
-	{
-		throw IECore::Exception( boost::str( boost::format( "Cannot apply tweak with mode %s to \"%s\" : This parameter does not exist" ) % modeToString( mode ) % name ) );
-	}
-
-	NumericTweak t( newData.get(), mode, name );
-	dispatch( parameterValue, t );
-
-
+	const Mode mode = static_cast<Mode>( modePlug()->getValue() );
+	applyTweakInternal( mode, this->valuePlug(), name, name, parameters, requireExists );
 }
 
+void TweakPlug::applyTweaks( const Plug *tweaksPlug, IECoreScene::ShaderNetwork *shaderNetwork )
+{
+	unordered_map<InternedString, IECoreScene::ShaderPtr> modifiedShaders;
+
+	bool removedConnections = false;
+	for( TweakPlugIterator tIt( tweaksPlug ); !tIt.done(); ++tIt )
+	{
+		const TweakPlug *tweakPlug = tIt->get();
+		const std::string name = tweakPlug->namePlug()->getValue();
+		if( name.empty() )
+		{
+			continue;
+		}
+
+		ShaderNetwork::Parameter parameter;
+		size_t dotPos = name.find_last_of( '.' );
+		if( dotPos == string::npos )
+		{
+			parameter.shader = shaderNetwork->getOutput().shader;
+			parameter.name = name;
+		}
+		else
+		{
+			parameter.shader = InternedString( name.c_str(), dotPos );
+			parameter.name = InternedString( name.c_str() + dotPos + 1 );
+		}
+
+		if( !tweakPlug->enabledPlug()->getValue() )
+		{
+			continue;
+		}
+
+		const Mode mode = static_cast<Mode>( tweakPlug->modePlug()->getValue() );
+
+		if( auto input = shaderNetwork->input( parameter )  )
+		{
+			if( mode != Mode::Replace )
+			{
+				throw IECore::Exception( boost::str( boost::format( "Cannot apply tweak to \"%s\" : Mode must be \"Replace\" when a previous connection exists" ) % name ) );
+			}
+			shaderNetwork->removeConnection( { input, parameter } );
+			removedConnections = true;
+		}
+
+		const auto shaderOutput = tweakPlug->shaderOutput();
+		if( shaderOutput.first )
+		{
+			// New connection
+			ConstCompoundObjectPtr shaderAttributes = shaderOutput.first->attributes( shaderOutput.second );
+			const ShaderNetwork *inputNetwork = nullptr;
+			for( const auto &a : shaderAttributes->members() )
+			{
+				if( ( inputNetwork = runTimeCast<const ShaderNetwork>( a.second.get() ) ) )
+				{
+					break;
+				}
+			}
+
+			if( inputNetwork && inputNetwork->getOutput() )
+			{
+				if( mode != Mode::Replace )
+				{
+					throw IECore::Exception( boost::str( boost::format( "Cannot apply tweak to \"%s\" : Mode must be \"Replace\" when inserting a connection" ) % name ) );
+				}
+				const auto inputParameter = ShaderNetworkAlgo::addShaders( shaderNetwork, inputNetwork );
+				shaderNetwork->addConnection( { inputParameter, parameter } );
+			}
+		}
+		else
+		{
+			// Regular tweak
+			auto modifiedShader = modifiedShaders.insert( { parameter.shader, nullptr } );
+			if( modifiedShader.second )
+			{
+				if( const IECoreScene::Shader *shader = shaderNetwork->getShader( parameter.shader ) )
+				{
+					modifiedShader.first->second = shader->copy();
+				}
+				else
+				{
+					throw IECore::Exception( boost::str(
+						boost::format( "Cannot apply tweak \"%1%\" because shader \"%2%\" does not exist" ) % name % parameter.shader
+					) );
+				}
+			}
+
+			applyTweakInternal( mode, tweakPlug->valuePlug(), name, parameter.name, modifiedShader.first->second->parametersData(), /* requireExists = */ true );
+		}
+	}
+
+	for( auto &x : modifiedShaders )
+	{
+		shaderNetwork->setShader( x.first, std::move( x.second ) );
+	}
+
+	if( removedConnections )
+	{
+		ShaderNetworkAlgo::removeUnusedShaders( shaderNetwork );
+	}
+}
+
+std::pair<const GafferScene::Shader *, const Gaffer::Plug *> TweakPlug::shaderOutput() const
+{
+	const Plug *source = valuePlug()->source();
+	if( source != valuePlug() )
+	{
+		if( auto shader = runTimeCast<const GafferScene::Shader>( source->node() ) )
+		{
+			if( source == shader->outPlug() || shader->outPlug()->isAncestorOf( source ) )
+			{
+				return { shader, source };
+			}
+		}
+	}
+	return { nullptr, nullptr };
+}
+
+//////////////////////////////////////////////////////////////////////////
+// TweaksPlug
+//////////////////////////////////////////////////////////////////////////
+
+IE_CORE_DEFINERUNTIMETYPED( TweaksPlug );
+
+TweaksPlug::TweaksPlug( const std::string &name, Direction direction, unsigned flags )
+	:	ValuePlug( name, direction, flags )
+{
+}
+
+bool TweaksPlug::acceptsChild( const Gaffer::GraphComponent *potentialChild ) const
+{
+	if( !ValuePlug::acceptsChild( potentialChild ) )
+	{
+		return false;
+	}
+
+	return runTimeCast<const TweakPlug>( potentialChild );
+}
+
+bool TweaksPlug::acceptsInput( const Plug *input ) const
+{
+	if( !ValuePlug::acceptsChild( input ) )
+	{
+		return false;
+	}
+
+	if( !input )
+	{
+		return true;
+	}
+
+	if( const ScriptNode *s = ancestor<ScriptNode>() )
+	{
+		if( s->isExecuting() )
+		{
+			// Before TweaksPlug existed, regular Plugs were
+			// used in its place. If such plugs were ever
+			// promoted or passed through dots, they will have
+			// been serialised with just a regular plug type,
+			// and we need to tolerate connections to them
+			// on loading.
+			return true;
+		}
+	}
+
+	return runTimeCast<const TweaksPlug>( input );
+}
+
+Gaffer::PlugPtr TweaksPlug::createCounterpart( const std::string &name, Direction direction ) const
+{
+	PlugPtr result = new TweaksPlug( name, direction, getFlags() );
+	for( PlugIterator it( this ); !it.done(); ++it )
+	{
+		result->addChild( (*it)->createCounterpart( (*it)->getName(), direction ) );
+	}
+	return result;
+}
+
+void TweaksPlug::applyTweaks( IECore::CompoundData *parameters, bool requireExists ) const
+{
+	for( TweakPlugIterator it( this ); !it.done(); ++it )
+	{
+		(*it)->applyTweak( parameters, requireExists );
+	}
+}
+
+void TweaksPlug::applyTweaks( IECoreScene::ShaderNetwork *shaderNetwork ) const
+{
+	TweakPlug::applyTweaks( this, shaderNetwork );
+}

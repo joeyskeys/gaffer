@@ -237,10 +237,10 @@ class ContextTest( GafferTest.TestCase ) :
 		self.assertEqual( c["v"], v )
 		self.failIf( c["v"].isSame( v ) )
 
-	def testGetWithDefault( self ) :
+	def testGetFallbackValue( self ) :
 
 		c = Gaffer.Context()
-		self.assertRaises( RuntimeError, c.get, "f" )
+		self.assertEqual( c.get( "f" ), None )
 		self.assertEqual( c.get( "f", 10 ), 10 )
 		c["f"] = 1.0
 		self.assertEqual( c.get( "f" ), 1.0 )
@@ -354,6 +354,7 @@ class ContextTest( GafferTest.TestCase ) :
 
 		self.assertEqual( cc.names(), cc.keys() )
 
+	@GafferTest.TestRunner.PerformanceTestMethod()
 	def testManyContexts( self ) :
 
 		GafferTest.testManyContexts()
@@ -547,10 +548,12 @@ class ContextTest( GafferTest.TestCase ) :
 		c["ui:test"] = 1
 		self.assertEqual( h, c.hash() )
 
+	@GafferTest.TestRunner.PerformanceTestMethod()
 	def testManySubstitutions( self ) :
 
 		GafferTest.testManySubstitutions()
 
+	@GafferTest.TestRunner.PerformanceTestMethod()
 	def testManyEnvironmentSubstitutions( self ) :
 
 		GafferTest.testManyEnvironmentSubstitutions()

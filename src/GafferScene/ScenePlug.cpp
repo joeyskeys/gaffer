@@ -255,10 +255,22 @@ const Gaffer::PathMatcherDataPlug *ScenePlug::setPlug() const
 ScenePlug::PathScope::PathScope( const Gaffer::Context *context )
 	:	EditableScope( context )
 {
+	remove( ScenePlug::setNameContextName );
 }
 
 ScenePlug::PathScope::PathScope( const Gaffer::Context *context, const ScenePath &scenePath )
-	:	EditableScope( context )
+	:	PathScope( context )
+{
+	setPath( scenePath );
+}
+
+ScenePlug::PathScope::PathScope( const Gaffer::ThreadState &threadState )
+	:	EditableScope( threadState )
+{
+}
+
+ScenePlug::PathScope::PathScope( const Gaffer::ThreadState &threadState, const ScenePath &scenePath )
+	:	EditableScope( threadState )
 {
 	setPath( scenePath );
 }
@@ -283,6 +295,21 @@ ScenePlug::SetScope::SetScope( const Gaffer::Context *context, const IECore::Int
 	setSetName( setName );
 }
 
+ScenePlug::SetScope::SetScope( const Gaffer::ThreadState &threadState )
+	:	EditableScope( threadState )
+{
+	remove( Filter::inputSceneContextName );
+	remove( ScenePlug::scenePathContextName );
+}
+
+ScenePlug::SetScope::SetScope( const Gaffer::ThreadState &threadState, const IECore::InternedString &setName )
+	:	EditableScope( threadState )
+{
+	remove( Filter::inputSceneContextName );
+	remove( ScenePlug::scenePathContextName );
+	setSetName( setName );
+}
+
 void ScenePlug::SetScope::setSetName( const IECore::InternedString &setName )
 {
 	set( setNameContextName, setName );
@@ -290,6 +317,14 @@ void ScenePlug::SetScope::setSetName( const IECore::InternedString &setName )
 
 ScenePlug::GlobalScope::GlobalScope( const Gaffer::Context *context )
 	:	EditableScope( context )
+{
+	remove( Filter::inputSceneContextName );
+	remove( scenePathContextName );
+	remove( setNameContextName );
+}
+
+ScenePlug::GlobalScope::GlobalScope( const Gaffer::ThreadState &threadState )
+	:	EditableScope( threadState )
 {
 	remove( Filter::inputSceneContextName );
 	remove( scenePathContextName );

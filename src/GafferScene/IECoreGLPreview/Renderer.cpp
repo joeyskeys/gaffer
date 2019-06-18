@@ -514,6 +514,11 @@ class OpenGLRenderer final : public IECoreScenePreview::Renderer
 			return this->object( name, object, attributes );
 		}
 
+		ObjectInterfacePtr lightFilter( const std::string &name, const IECore::Object *object, const AttributesInterface *attributes ) override
+		{
+			return this->object( name, object, attributes );
+		}
+
 		Renderer::ObjectInterfacePtr object( const std::string &name, const IECore::Object *object, const AttributesInterface *attributes ) override
 		{
 			OpenGLObjectPtr result = new OpenGLObject( name, object, static_cast<const OpenGLAttributes *>( attributes ), m_editQueue );
@@ -546,7 +551,7 @@ class OpenGLRenderer final : public IECoreScenePreview::Renderer
 			}
 		}
 
-		virtual IECore::DataPtr command( const IECore::InternedString name, const IECore::CompoundDataMap &parameters ) override
+		IECore::DataPtr command( const IECore::InternedString name, const IECore::CompoundDataMap &parameters ) override
 		{
 			if( name == "gl:queryBound" )
 			{

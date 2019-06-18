@@ -45,7 +45,7 @@ import IECoreGL
 import GafferTest
 import GafferScene
 
-@unittest.skipIf( "TRAVIS" in os.environ, "OpenGL not set up on Travis" )
+@unittest.skipIf( "TRAVIS" in os.environ or "TF_BUILD" in os.environ, "OpenGL not set up" )
 class RendererTest( GafferTest.TestCase ) :
 
 	def setUp( self ) :
@@ -96,9 +96,12 @@ class RendererTest( GafferTest.TestCase ) :
 
 		attributes = renderer.attributes(
 			IECore.CompoundObject( {
-				"gl:surface" : IECore.ObjectVector( [
-					IECoreScene.Shader( "rgbColor", "surface", { "gl:fragmentSource" : fragmentSource } )
-				] )
+				"gl:surface" : IECoreScene.ShaderNetwork(
+					{
+						"output" : IECoreScene.Shader( "rgbColor", "surface", { "gl:fragmentSource" : fragmentSource } )
+					},
+					output = "output"
+				)
 			} )
 		)
 
@@ -169,16 +172,19 @@ class RendererTest( GafferTest.TestCase ) :
 
 		attributes = renderer.attributes(
 			IECore.CompoundObject( {
-				"gl:surface" : IECore.ObjectVector( [
-					IECoreScene.Shader(
-						"color",
-						"surface",
-						{
-							"gl:fragmentSource" : fragmentSource,
-							"colorValue" : imath.Color3f( 1, 0, 0 )
-						}
-					)
-				] )
+				"gl:surface" : IECoreScene.ShaderNetwork(
+					shaders = {
+						"output" : IECoreScene.Shader(
+							"color",
+							"surface",
+							{
+								"gl:fragmentSource" : fragmentSource,
+								"colorValue" : imath.Color3f( 1, 0, 0 )
+							}
+						)
+					},
+					output = "output"
+				)
 			} )
 		)
 

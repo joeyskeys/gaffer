@@ -114,11 +114,16 @@ class GLWidget( GafferUI.Widget ) :
 
 		self.__overlays.add( overlay )
 		overlay._setStyleSheet()
-		if sys.platform == "darwin" and Qt.__binding__ in ( "PySide2", "PyQt5" ) :
-			# Force Qt to use a raster drawing path for the overlays,
-			# to avoid "QMacCGContext:: Unsupported painter devtype type 1"
-			# errors. See https://bugreports.qt.io/browse/QTBUG-32639 for
-			# further details.
+		if Qt.__binding__ in ( "PySide2", "PyQt5" ) :
+			# Force Qt to use a raster drawing path for the overlays.
+			#
+			# - On Mac, this avoids "QMacCGContext:: Unsupported painter devtype type 1"
+			#   errors. See https://bugreports.qt.io/browse/QTBUG-32639 for
+			#   further details.
+			# - On Linux, this avoids an unknown problem which manifests as
+			#   a GL error that appears to occur inside Qt's code, and which
+			#   is accompanied by text drawing being scrambled in the overlay.
+			#
 			## \todo When we no longer need to support Qt4, we should be
 			# able to stop using a QGLWidget for the viewport, and this
 			# should no longer be needed.
@@ -412,6 +417,12 @@ class _GLGraphicsScene( QtWidgets.QGraphicsScene ) :
 		GL.glPopAttrib()
 
 		painter.endNativePainting()
+
+	## QGraphicsScene consumes all drag events by default, which is unhelpful
+	# for us as it breaks any Qt based drag-drop we may be attempting.
+	def dragEnterEvent( self, event ) :
+
+		event.ignore()
 
 	def __sceneRectChanged( self, sceneRect ) :
 

@@ -45,6 +45,7 @@ from PrimitiveInspector import PrimitiveInspector
 from FilterPlugValueWidget import FilterPlugValueWidget
 from ScenePathPlugValueWidget import ScenePathPlugValueWidget
 from TweakPlugValueWidget import TweakPlugValueWidget
+import SceneHistoryUI
 
 import SceneNodeUI
 import SceneReaderUI
@@ -120,7 +121,7 @@ import FilterProcessorUI
 import MeshToPointsUI
 import RenderUI
 import ShaderBallUI
-import LightTweaksUI
+import ShaderTweaksUI
 import CameraTweaksUI
 import LightToCameraUI
 import FilterResultsUI
@@ -145,6 +146,10 @@ import CopyAttributesUI
 import CollectPrimitiveVariablesUI
 import PrimitiveVariableExistsUI
 import CollectTransformsUI
+import UDIMQueryUI
+import WireframeUI
+import SetVisualiserUI
+import LightFilterUI
 
 # then all the PathPreviewWidgets. note that the order
 # of import controls the order of display.

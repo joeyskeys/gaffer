@@ -54,8 +54,8 @@ enum TypeId
 	DeletePrimitiveVariablesTypeId = 110509,
 	GroupTypeId = 110510,
 	ShaderPlugTypeId = 110511,
-	SceneContextProcessorTypeId = 110512, // Obsolete, available for reuse
-	SceneTimeWarpTypeId = 110513, // Obsolete, available for reuse
+	UDIMQueryTypeId = 110512,
+	WireframeTypeId = 110513,
 	ObjectSourceTypeId = 110514,
 	PlaneTypeId = 110515,
 	SeedsTypeId = 110516,
@@ -73,7 +73,7 @@ enum TypeId
 	AttributesTypeId = 110528,
 	GlobalShaderTypeId = 110529,
 	ClippingPlaneTypeId = 110530,
-	SceneContextVariablesTypeId = 110531, // Obsolete, available for reuse
+	TweaksPlugTypeId = 110531,
 	StandardOptionsTypeId = 110532,
 	SubTreeTypeId = 110533,
 	OpenGLAttributesTypeId = 110534,
@@ -105,8 +105,8 @@ enum TypeId
 	AttributeProcessorTypeId = 110560,
 	DeleteAttributesTypeId = 110561,
 	UnionFilterTypeId = 110562,
-	SceneSwitchTypeId = 110563, // Obsolete, available for reuse
-	ShaderSwitchTypeId = 110564, // Obsolete, available for reuse
+	SetVisualiserTypeId = 110563,
+	LightFilterTypeId = 110564,
 	ParentConstraintTypeId = 110565,
 	ParentTypeId = 110566,
 	PrimitiveVariablesTypeId = 110567,
@@ -129,7 +129,7 @@ enum TypeId
 	SceneLoopTypeId = 110584, // Obsolete, available for reuse
 	RenderTypeId = 110585,
 	FilterPlugTypeId = 110586,
-	LightTweaksTypeId = 110587,
+	ShaderTweaksTypeId = 110587,
 	TweakPlugTypeId = 110588,
 	CopyOptionsTypeId = 110589,
 	LightToCameraTypeId = 110590,

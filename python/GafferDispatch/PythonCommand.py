@@ -65,13 +65,16 @@ class PythonCommand( GafferDispatch.TaskNode ) :
 
 		h.append( command )
 
-		parser = _Parser( command )
-		for name in parser.contextReads :
+		for name in _contextReadsCache.get( command ) :
 			value = context.get( name )
 			if isinstance( value, IECore.Object ) :
 				value.hash( h )
-			else :
+			elif value is not None :
 				h.append( value )
+			else :
+				# Variable not in context. Hash a value that is
+				# extremely unlikely to be found in a context.
+				h.append( "__pythonCommandMissingContextVariable__" )
 
 		self["variables"].hash( h )
 
@@ -83,7 +86,8 @@ class PythonCommand( GafferDispatch.TaskNode ) :
 	def execute( self ) :
 
 		executionDict = self.__executionDict()
-		exec( self["command"].getValue(), executionDict, executionDict )
+		with executionDict["context"] :
+			exec( _codeObjectCache.get( self["command"].getValue() ), executionDict, executionDict )
 
 	def executeSequence( self, frames ) :
 
@@ -97,7 +101,8 @@ class PythonCommand( GafferDispatch.TaskNode ) :
 			return
 
 		executionDict = self.__executionDict( frames )
-		exec( self["command"].getValue(), executionDict, executionDict )
+		with executionDict["context"] :
+			exec( self["command"].getValue(), executionDict, executionDict )
 
 	def requiresSequenceExecution( self ) :
 
@@ -105,16 +110,18 @@ class PythonCommand( GafferDispatch.TaskNode ) :
 
 	def __executionDict( self, frames = None ) :
 
+		context = Gaffer.Context( Gaffer.Context.current() )
+
 		result = {
 			"IECore" : IECore,
 			"Gaffer" : Gaffer,
 			"imath" : imath,
 			"self" : self,
-			"context" : Gaffer.Context.current(),
+			"context" : context,
 			"variables" : _VariablesDict(
 				self["variables"],
-				Gaffer.Context.current(),
-				validFrames = set( frames ) if frames is not None else { Gaffer.Context.current().getFrame() }
+				context,
+				validFrames = set( frames ) if frames is not None else { context.getFrame() }
 			)
 		}
 
@@ -206,5 +213,17 @@ class _Parser( ast.NodeVisitor ) :
 						self.contextReads.add( node.args[0].s )
 
 		ast.NodeVisitor.generic_visit( self, node )
+
+def __contextReadsCacheGetter( expression ) :
+
+	return _Parser( expression ).contextReads, 1
+
+_contextReadsCache = IECore.LRUCache( __contextReadsCacheGetter, 10000 )
+
+def __codeObjectCacheGetter( expression ) :
+
+	return compile( expression, "<string>", "exec" ), 1
+
+_codeObjectCache = IECore.LRUCache( __codeObjectCacheGetter, 10000 )
 
 IECore.registerRunTimeTyped( PythonCommand, typeName = "GafferDispatch::PythonCommand" )

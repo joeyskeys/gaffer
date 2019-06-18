@@ -62,12 +62,12 @@ class GraphEditor( GafferUI.Editor ) :
 		self.__gadgetWidget.getViewportGadget().setDragTracking( GafferUI.ViewportGadget.DragTracking.XDragTracking | GafferUI.ViewportGadget.DragTracking.YDragTracking )
 		self.__frame( scriptNode.selection() )
 
-		self.__buttonPressConnection = self.__gadgetWidget.buttonPressSignal().connect( Gaffer.WeakMethod( self.__buttonPress ) )
-		self.__keyPressConnection = self.__gadgetWidget.keyPressSignal().connect( Gaffer.WeakMethod( self.__keyPress ) )
-		self.__buttonDoubleClickConnection = self.__gadgetWidget.buttonDoubleClickSignal().connect( Gaffer.WeakMethod( self.__buttonDoubleClick ) )
-		self.__dragEnterConnection = self.__gadgetWidget.dragEnterSignal().connect( Gaffer.WeakMethod( self.__dragEnter ) )
-		self.__dropConnection = self.__gadgetWidget.dropSignal().connect( Gaffer.WeakMethod( self.__drop ) )
-		self.__preRenderConnection = self.__gadgetWidget.getViewportGadget().preRenderSignal().connect( Gaffer.WeakMethod( self.__preRender ) )
+		self.__gadgetWidget.buttonPressSignal().connect( Gaffer.WeakMethod( self.__buttonPress ), scoped = False )
+		self.__gadgetWidget.keyPressSignal().connect( Gaffer.WeakMethod( self.__keyPress ), scoped = False )
+		self.__gadgetWidget.buttonDoubleClickSignal().connect( Gaffer.WeakMethod( self.__buttonDoubleClick ), scoped = False )
+		self.__gadgetWidget.dragEnterSignal().connect( Gaffer.WeakMethod( self.__dragEnter ), scoped = False )
+		self.__gadgetWidget.dropSignal().connect( Gaffer.WeakMethod( self.__drop ), scoped = False )
+		self.__gadgetWidget.getViewportGadget().preRenderSignal().connect( Gaffer.WeakMethod( self.__preRender ), scoped = False )
 
 		self.__nodeMenu = None
 
@@ -126,6 +126,37 @@ class GraphEditor( GafferUI.Editor ) :
 	def connectionContextMenuSignal( cls ) :
 
 		return cls.__connectionContextMenuSignal
+
+	@classmethod
+	def appendConnectionNavigationMenuDefinitions( cls, graphEditor, destinationPlug, menuDefinition ) :
+
+		def __append( plug, label ) :
+
+			node = plug.node()
+			nodeGadget = graphEditor.graphGadget().nodeGadget( node ) if node is not None else None
+
+			menuDefinition.append(
+				"/Navigate/Go to " + label,
+				{
+					"active" : nodeGadget is not None,
+					"command" : functools.partial(
+						Gaffer.WeakMethod( graphEditor.frame ), [ node ]
+					)
+				}
+			)
+
+			menuDefinition.append(
+				"/Navigate/Select " + label,
+				{
+					"active" : node is not None,
+					"command" : functools.partial(
+						cls.__select, node
+					)
+				}
+			)
+
+		__append( destinationPlug.getInput(), "Source Node" )
+		__append( destinationPlug, "Destination Node" )
 
 	__nodeContextMenuSignal = Gaffer.Signal3()
 	## Returns a signal which is emitted to create a context menu for a
@@ -249,7 +280,7 @@ class GraphEditor( GafferUI.Editor ) :
 
 		if self.__nodeMenu is None :
 			self.__nodeMenu = GafferUI.Menu( GafferUI.NodeMenu.acquire( self.scriptNode().applicationRoot() ).definition(), searchable=True )
-			self.__nodeMenuVisibilityChangedConnection = self.__nodeMenu.visibilityChangedSignal().connect( Gaffer.WeakMethod( self.__nodeMenuVisibilityChanged ) )
+			self.__nodeMenu.visibilityChangedSignal().connect( Gaffer.WeakMethod( self.__nodeMenuVisibilityChanged ), scoped = False )
 
 		return self.__nodeMenu
 
@@ -475,11 +506,8 @@ class GraphEditor( GafferUI.Editor ) :
 
 	def __rootParentChanged( self, root, oldParent ) :
 
-		# root has been deleted
-		## \todo I'm not sure if we should be responsible for removing ourselves or not.
-		# Perhaps we should just signal that we're not valid in some way and the CompoundEditor should
-		# remove us? Consider how this relates to NodeEditor.__deleteWindow() too.
-		self.parent().removeChild( self )
+		# Root has been deleted.
+		self.graphGadget().setRoot( self.scriptNode() )
 
 	def __preRender( self, viewportGadget ) :
 
@@ -546,5 +574,11 @@ class GraphEditor( GafferUI.Editor ) :
 
 		## \todo: Remove nodeGraph fallback when all client code has been updated
 		return Gaffer.Metadata.value( node, "nodeGraph:childrenViewable" )
+
+	@staticmethod
+	def __select( node ) :
+
+		node.scriptNode().selection().clear()
+		node.scriptNode().selection().add( node )
 
 GafferUI.Editor.registerType( "GraphEditor", GraphEditor )

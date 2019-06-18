@@ -38,6 +38,8 @@
 import os
 import glob
 import inspect
+import platform
+import ctypes
 
 import IECore
 
@@ -85,7 +87,7 @@ def exportNodeReference( directory, modules = [], modulePath = "" ) :
 			__makeDirs( directory + "/" + module.__name__ )
 			with open( "%s/%s/%s.md" % ( directory, module.__name__, name ), "w" ) as f :
 				f.write( __nodeDocumentation( node ) )
-				moduleIndex += "\n\t%s.md" % name
+				moduleIndex += "\n{}{}.md".format( " " * 4, name )
 
 		if moduleIndex :
 
@@ -93,7 +95,7 @@ def exportNodeReference( directory, modules = [], modulePath = "" ) :
 				f.write( __heading( module.__name__ ) )
 				f.write( __tocString( ).format( moduleIndex ) )
 
-			tocIndex += "\n\t%s/index.md" % ( module.__name__ )
+			tocIndex += "\n{}{}/index.md".format( " " * 4, module.__name__ )
 
 	index.write( __tocString( ).format( tocIndex ) )
 
@@ -183,12 +185,20 @@ def exportCommandLineReference( directory, appPath = "$GAFFER_ROOT/apps", ignore
 		if appName in ignore :
 			continue
 
-		tocIndex += "\n\t%s.md" % appName
+		tocIndex += "\n{}{}.md".format( " " * 4, appName )
 		with open( "%s.md" % appName, "w" ) as f :
 
 			f.write( __appDocumentation( classLoader.load( appName )() ) )
 
 	index.write( __tocString( ).format( tocIndex ) )
+
+def markdownToHTML( markdown ) :
+
+	cmark = __cmark()
+	if cmark is None :
+		return markdown
+
+	return cmark.cmark_markdown_to_html( markdown, len( markdown ), 0 )
 
 def __nodeDocumentation( node ) :
 
@@ -280,3 +290,30 @@ def __tocString( ) :
 	)
 
 	return tocString
+
+__cmarkDLL = ""
+def __cmark() :
+
+	global __cmarkDLL
+	if __cmarkDLL != "" :
+		return __cmarkDLL
+
+	sys = platform.system()
+
+	if sys == "Darwin" :
+		libName = "libcmark-gfm.dylib"
+	elif sys == "Windows" :
+		libName = "cmark-gfm.dll"
+	else :
+		libName = "libcmark-gfm.so"
+
+	try :
+		__cmarkDLL = ctypes.CDLL( libName )
+	except :
+		__cmarkDLL = None
+		return __cmarkDLL
+
+	__cmarkDLL.cmark_markdown_to_html.restype = ctypes.c_char_p
+	__cmarkDLL.cmark_markdown_to_html.argtypes = [ctypes.c_char_p, ctypes.c_long, ctypes.c_long]
+
+	return __cmarkDLL

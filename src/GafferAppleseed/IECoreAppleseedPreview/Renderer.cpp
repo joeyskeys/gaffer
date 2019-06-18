@@ -47,7 +47,7 @@
 #include "IECoreAppleseed/ParameterAlgo.h"
 #include "IECoreAppleseed/ProgressTileCallback.h"
 #include "IECoreAppleseed/RendererController.h"
-#include "IECoreAppleseed/ShaderAlgo.h"
+#include "IECoreAppleseed/ShaderNetworkAlgo.h"
 #include "IECoreAppleseed/TransformAlgo.h"
 
 #include "IECoreScene/Camera.h"
@@ -55,7 +55,6 @@
 
 #include "IECore/MessageHandler.h"
 #include "IECore/ObjectInterpolator.h"
-#include "IECore/ObjectVector.h"
 #include "IECore/SimpleTypedData.h"
 
 #include "foundation/platform/timers.h"
@@ -181,7 +180,7 @@ class AppleseedRendererBase : public IECoreScenePreview::Renderer
 
 	public :
 
-		virtual ~AppleseedRendererBase() override;
+		~AppleseedRendererBase() override;
 
 		IECore::InternedString name() const override
 		{
@@ -613,10 +612,10 @@ class AppleseedShader : public AppleseedEntity
 
 	public :
 
-		AppleseedShader( asr::Project &project, const string &name, const ObjectVector *shader, bool interactiveRender )
+		AppleseedShader( asr::Project &project, const string &name, const ShaderNetwork *shader, bool interactiveRender )
 			:	AppleseedEntity( project, name, interactiveRender )
 		{
-			asf::auto_release_ptr<asr::ShaderGroup> shaderGroup( ShaderAlgo::convert( shader ) );
+			asf::auto_release_ptr<asr::ShaderGroup> shaderGroup( ShaderNetworkAlgo::convert( shader ) );
 			shaderGroup->set_name( name.c_str() );
 			m_shaderGroup = shaderGroup.get();
 			insertShaderGroup( shaderGroup );
@@ -666,7 +665,7 @@ class ShaderCache : public RefCounted
 		}
 
 		// Can be called concurrently with other get() calls.
-		AppleseedShaderPtr get( const ObjectVector *shader )
+		AppleseedShaderPtr get( const ShaderNetwork *shader )
 		{
 			Cache::accessor a;
 			m_cache.insert( a, shader->Object::hash() );
@@ -783,12 +782,12 @@ class AppleseedAttributes : public IECoreScenePreview::Renderer::AttributesInter
 				m_meshSmoothTangents = d->readable();
 			}
 
-			m_lightShader = attribute<ObjectVector>( g_appleseedLightShaderAttributeName, attributes );
-			m_lightShader = m_lightShader ? m_lightShader : attribute<ObjectVector>( g_lightShaderAttributeName, attributes );
+			m_lightShader = attribute<ShaderNetwork>( g_appleseedLightShaderAttributeName, attributes );
+			m_lightShader = m_lightShader ? m_lightShader : attribute<ShaderNetwork>( g_lightShaderAttributeName, attributes );
 
-			const ObjectVector *surfaceShaderAttribute = attribute<ObjectVector>( g_appleseedSurfaceShaderAttributeName, attributes );
-			surfaceShaderAttribute = surfaceShaderAttribute ? surfaceShaderAttribute : attribute<ObjectVector>( g_oslSurfaceShaderAttributeName, attributes );
-			surfaceShaderAttribute = surfaceShaderAttribute ? surfaceShaderAttribute : attribute<ObjectVector>( g_surfaceShaderAttributeName, attributes );
+			const ShaderNetwork *surfaceShaderAttribute = attribute<ShaderNetwork>( g_appleseedSurfaceShaderAttributeName, attributes );
+			surfaceShaderAttribute = surfaceShaderAttribute ? surfaceShaderAttribute : attribute<ShaderNetwork>( g_oslSurfaceShaderAttributeName, attributes );
+			surfaceShaderAttribute = surfaceShaderAttribute ? surfaceShaderAttribute : attribute<ShaderNetwork>( g_surfaceShaderAttributeName, attributes );
 
 			if( surfaceShaderAttribute )
 			{
@@ -827,7 +826,7 @@ class AppleseedAttributes : public IECoreScenePreview::Renderer::AttributesInter
 		asf::Dictionary m_visibilityDictionary;
 		bool m_meshSmoothNormals;
 		bool m_meshSmoothTangents;
-		ConstObjectVectorPtr m_lightShader;
+		ConstShaderNetworkPtr m_lightShader;
 		AppleseedShaderPtr m_shaderGroup;
 
 	private :
@@ -1509,30 +1508,14 @@ bool isAreaLight( const string &lightModel )
 	return edfFactoryRegistrar.lookup( lightModel.c_str() ) != nullptr;
 }
 
-string getLightModel( const ObjectVector* lightShader )
+string getLightModel( const ShaderNetwork *lightShader )
 {
-	for( ObjectVector::MemberContainer::const_iterator it = lightShader->members().begin(), eIt = lightShader->members().end(); it != eIt; ++it )
-	{
-		if( const Shader *shader = runTimeCast<const Shader>( it->get() ) )
-		{
-			return shader->getName();
-		}
-	}
-
-	return string();
+	return lightShader->outputShader()->getName();
 }
 
-const CompoundDataMap *getLightParameters( const ObjectVector* lightShader )
+const CompoundDataMap *getLightParameters( const ShaderNetwork *lightShader )
 {
-	for( ObjectVector::MemberContainer::const_iterator it = lightShader->members().begin(), eIt = lightShader->members().end(); it != eIt; ++it )
-	{
-		if( const Shader *shader = runTimeCast<const Shader>( it->get() ) )
-		{
-			return &shader->parameters();
-		}
-	}
-
-	return nullptr;
+	return &(lightShader->outputShader()->parameters());
 }
 
 /// Appleseed light handle base class.
@@ -1762,7 +1745,7 @@ class AppleseedAreaLight : public AppleseedLight
 			AppleseedAreaLight::attributes( attributes );
 		}
 
-		virtual ~AppleseedAreaLight()
+		~AppleseedAreaLight() override
 		{
 			if( isInteractiveRender() )
 			{
@@ -1785,7 +1768,7 @@ class AppleseedAreaLight : public AppleseedLight
 			}
 		}
 
-		virtual void transform( const M44f &transform )
+		void transform( const M44f &transform ) override
 		{
 			M44d md( transform );
 			asf::Matrix4d m( md );
@@ -1802,13 +1785,13 @@ class AppleseedAreaLight : public AppleseedLight
 			}
 		}
 
-		virtual void transform( const vector<M44f> &samples, const vector<float> &times )
+		void transform( const vector<M44f> &samples, const vector<float> &times ) override
 		{
 			// appleseed does not support light transform motion blur yet.
 			transform(samples[0]);
 		}
 
-		virtual bool attributes( const IECoreScenePreview::Renderer::AttributesInterface *attributes )
+		bool attributes( const IECoreScenePreview::Renderer::AttributesInterface *attributes ) override
 		{
 			// Remove any previously created area light.
 			removeAreaLightEntities();
@@ -1968,12 +1951,12 @@ class ProceduralRenderer : public AppleseedRendererBase
 			assert( renderType != Interactive );
 		}
 
-		virtual void option( const IECore::InternedString &name, const IECore::Object *value ) override
+		void option( const IECore::InternedString &name, const IECore::Object *value ) override
 		{
 			IECore::msg( IECore::Msg::Warning, "AppleseedRenderer", "Procedurals can not call option()" );
 		}
 
-		virtual void output( const IECore::InternedString &name, const Output *output ) override
+		void output( const IECore::InternedString &name, const Output *output ) override
 		{
 			IECore::msg( IECore::Msg::Warning, "AppleseedRenderer", "Procedurals can not call output()" );
 		}
@@ -1990,12 +1973,20 @@ class ProceduralRenderer : public AppleseedRendererBase
 			return nullptr;
 		}
 
-		virtual void render() override
+
+		ObjectInterfacePtr lightFilter( const std::string &name, const IECore::Object *object, const AttributesInterface *attributes ) override
+		{
+			IECore::msg( IECore::Msg::Warning, "AppleseedRenderer", "Procedurals can not call lightFilter()" );
+			return nullptr;
+		}
+
+
+		void render() override
 		{
 			IECore::msg( IECore::Msg::Warning, "AppleseedRenderer", "Procedurals can not call render()" );
 		}
 
-		virtual void pause() override
+		void pause() override
 		{
 			IECore::msg( IECore::Msg::Warning, "AppleseedRenderer", "Procedurals can not call pause()" );
 		}
@@ -2856,6 +2847,12 @@ class AppleseedRenderer final : public AppleseedRendererBase
 				}
 			}
 
+			return new AppleseedNullObject( *m_project, name, isInteractiveRender() );
+		}
+
+		ObjectInterfacePtr lightFilter( const string &name, const Object *object, const AttributesInterface *attributes ) override
+		{
+			// There is no support for light filters in Appleseed
 			return new AppleseedNullObject( *m_project, name, isInteractiveRender() );
 		}
 

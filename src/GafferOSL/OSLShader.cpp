@@ -48,6 +48,8 @@
 #include "Gaffer/SplinePlug.h"
 #include "Gaffer/StringPlug.h"
 
+#include "IECoreScene/ShaderNetwork.h"
+
 #include "IECoreImage/OpenImageIOAlgo.h"
 
 #include "IECore/LRUCache.h"
@@ -107,11 +109,18 @@ ConstShadingEnginePtr getter( const ShadingEngineCacheGetterKey &key, size_t &co
 	CompoundObject::ObjectMap::const_iterator it = attributes->members().find( "osl:surface" );
 	if( it == attributes->members().end() )
 	{
+		// If we didn't find a surface, check if it's named "osl:shader", since OSL doesn't actually
+		// enforce any difference between surfaces and shaders
+		it = attributes->members().find( "osl:shader" );
+	}
+
+	if( it == attributes->members().end() )
+	{
 		return nullptr;
 	}
 
-	const ObjectVector *network = runTimeCast<const ObjectVector>( it->second.get() );
-	if( !network || network->members().empty() )
+	const ShaderNetwork *network = runTimeCast<const ShaderNetwork>( it->second.get() );
+	if( !network || !network->size() )
 	{
 		return nullptr;
 	}

@@ -916,5 +916,76 @@ class GraphComponentTest( GafferTest.TestCase ) :
 		s.undo()
 		assertPreconditions()
 
+	def testParentChangedOverride( self ) :
+
+		class Child( Gaffer.GraphComponent ) :
+
+			def __init__( self, name = "Child" ) :
+
+				Gaffer.GraphComponent.__init__( self, name )
+
+				self.parentChanges = []
+
+			def _parentChanged( self, oldParent ) :
+
+				self.parentChanges.append( ( oldParent, self.parent() ) )
+
+		p1 = Gaffer.GraphComponent()
+		p2 = Gaffer.GraphComponent()
+
+		c = Child()
+		self.assertEqual( len( c.parentChanges ), 0 )
+
+		p1.addChild( c )
+		self.assertEqual( len( c.parentChanges ), 1 )
+		self.assertEqual( c.parentChanges[-1], ( None, p1 ) )
+
+		p1.removeChild( c )
+		self.assertEqual( len( c.parentChanges ), 2 )
+		self.assertEqual( c.parentChanges[-1], ( p1, None ) )
+
+		p1.addChild( c )
+		self.assertEqual( len( c.parentChanges ), 3 )
+		self.assertEqual( c.parentChanges[-1], ( None, p1 ) )
+
+		p2.addChild( c )
+		self.assertEqual( len( c.parentChanges ), 4 )
+		self.assertEqual( c.parentChanges[-1], ( p1, p2 ) )
+
+		# Cause a parent change by destroying the parent.
+		# We need to remove all references to the parent to do
+		# this, including those stored in the parentChanges list.
+		del p2
+		del c.parentChanges[:]
+
+		self.assertEqual( len( c.parentChanges ), 1 )
+		self.assertEqual( c.parentChanges[-1], ( None, None ) )
+
+	@GafferTest.TestRunner.PerformanceTestMethod()
+	def testMakeNamesUnique( self ) :
+
+		s = Gaffer.ScriptNode()
+
+		for i in range( 0, 1000 ) :
+			n = GafferTest.AddNode()
+			s.addChild( n )
+
+	@GafferTest.TestRunner.PerformanceTestMethod()
+	def testGetChild( self ) :
+
+		s = Gaffer.ScriptNode()
+
+		for i in range( 0, 1000 ) :
+			# explicitly setting the name to something unique
+			# avoids the overhead incurred by the example
+			# in testMakeNamesUnique
+			n = GafferTest.AddNode( "AddNode" + str( i ) )
+			s.addChild( n )
+
+		for i in range( 0, 1000 ) :
+			n = "AddNode" + str( i )
+			c = s[n]
+			self.assertEqual( c.getName(), n )
+
 if __name__ == "__main__":
 	unittest.main()

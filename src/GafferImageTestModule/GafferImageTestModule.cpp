@@ -36,16 +36,20 @@
 
 #include "boost/python.hpp"
 
+#include "GafferImageTest/ContextSanitiser.h"
+
 #include "GafferImage/ImageAlgo.h"
 #include "GafferImage/ImagePlug.h"
 
 #include "Gaffer/Node.h"
 
+#include "IECorePython/RefCountedBinding.h"
 #include "IECorePython/ScopedGILRelease.h"
 
 using namespace boost::python;
 using namespace Gaffer;
 using namespace GafferImage;
+using namespace GafferImageTest;
 
 namespace
 {
@@ -62,7 +66,12 @@ struct TilesEvaluateFunctor
 void processTiles( const GafferImage::ImagePlug *imagePlug )
 {
 	TilesEvaluateFunctor f;
-	ImageAlgo::parallelProcessTiles( imagePlug, imagePlug->channelNamesPlug()->getValue()->readable(), f );
+	ImageAlgo::parallelProcessTiles(
+		imagePlug, imagePlug->channelNamesPlug()->getValue()->readable(),
+		f,
+		imagePlug->dataWindowPlug()->getValue(),
+		ImageAlgo::TopToBottom
+	);
 }
 
 void processTilesOnDirty( const Gaffer::Plug *dirtiedPlug, ConstImagePlugPtr image )
@@ -94,6 +103,10 @@ boost::signals::connection connectProcessTilesToPlugDirtiedSignal( GafferImage::
 
 BOOST_PYTHON_MODULE( _GafferImageTest )
 {
+	IECorePython::RefCountedClass<ContextSanitiser, Gaffer::Monitor>( "ContextSanitiser" )
+		.def( init<>() )
+	;
+
 	def( "processTiles", &processTilesWrapper );
 	def( "connectProcessTilesToPlugDirtiedSignal", &connectProcessTilesToPlugDirtiedSignal );
 }

@@ -133,11 +133,19 @@ class Application( IECore.Parameterised ) :
 
 		threads = self.parameters()["threads"].getTypedValue()
 
-		with IECore.tbb_task_scheduler_init(
-			IECore.tbb_task_scheduler_init.automatic if threads == 0 else threads
+		with IECore.tbb_global_control(
+			IECore.tbb_global_control.parameter.max_allowed_parallelism,
+			IECore.hardwareConcurrency() if threads == 0 else threads
 		) :
 
 			self._executeStartupFiles( self.root().getName() )
+
+			# Append DEBUG message with process information to all messages
+			defaultMessageHandler = IECore.MessageHandler.getDefaultHandler()
+			if not isinstance( defaultMessageHandler, Gaffer.ProcessMessageHandler ) :
+				IECore.MessageHandler.setDefaultHandler(
+					Gaffer.ProcessMessageHandler( defaultMessageHandler )
+				)
 
 			return self._run( self.parameters().getValidatedValue() )
 

@@ -42,6 +42,7 @@ import collections
 import arnold
 
 import IECore
+import imath
 import IECoreArnold
 
 import Gaffer
@@ -66,6 +67,58 @@ def __aiMetadataGetBool( nodeEntry, paramName, name, defaultValue = None ) :
 	value = ctypes.c_bool()
 	if arnold.AiMetaDataGetBool( nodeEntry, paramName, name, value ) :
 		return bool( value )
+
+	return defaultValue
+
+def __aiMetadataGetInt( nodeEntry, paramName, name, defaultValue = None ) :
+
+	value = ctypes.c_int()
+	if arnold.AiMetaDataGetInt( nodeEntry, paramName, name, value ) :
+		return int( value.value )
+
+	return defaultValue
+
+def __aiMetadataGetFlt( nodeEntry, paramName, name, defaultValue = None ) :
+
+	value = ctypes.c_float()
+	if arnold.AiMetaDataGetFlt( nodeEntry, paramName, name, value ) :
+		return float( value.value )
+
+	return defaultValue
+
+def __aiMetadataGetRGB( nodeEntry, paramName, name, defaultValue = None ) :
+
+	value = arnold.AtRGB()
+	if arnold.AiMetaDataGetRGB( nodeEntry, paramName, name, value ) :
+		return imath.Color3f( value.r, value.g, value.b )
+
+	return defaultValue
+
+# SolidAngle does not appear to have wrapped AiMetaDataGetRGBA in Python, so we don't
+# support the RGBA case
+"""
+def __aiMetadataGetRGBA( nodeEntry, paramName, name, defaultValue = None ) :
+
+	value = arnold.AtRGBA()
+	if arnold.AiMetaDataGetRGBA( nodeEntry, paramName, name, value ) :
+		return imath.Color4f( value.r, value.g, value.b, value.a )
+
+	return defaultValue
+"""
+
+def __aiMetadataGetVec2( nodeEntry, paramName, name, defaultValue = None ) :
+
+	value = arnold.AtVector2()
+	if arnold.AiMetaDataGetVec2( nodeEntry, paramName, name, value ) :
+		return imath.V2f( value.x, value.y )
+
+	return defaultValue
+
+def __aiMetadataGetVec( nodeEntry, paramName, name, defaultValue = None ) :
+
+	value = arnold.AtVector()
+	if arnold.AiMetaDataGetVec( nodeEntry, paramName, name, value ) :
+		return imath.V3f( value.x, value.y, value.z )
 
 	return defaultValue
 
@@ -110,7 +163,6 @@ def __translateNodeMetadata( nodeEntry ) :
 	if url is not None :
 		__metadata[nodeName]["documentation:url"] = url
 
-	havePages = False
 	paramIt = arnold.AiNodeEntryGetParamIterator( nodeEntry )
 	while not arnold.AiParamIteratorFinished( paramIt ) :
 
@@ -152,7 +204,7 @@ def __translateNodeMetadata( nodeEntry ) :
 				arnold.AI_TYPE_BOOLEAN, arnold.AI_TYPE_ENUM, arnold.AI_TYPE_STRING
 			)
 		)
-		__metadata[paramPath]["nodule:type"] = "GafferUI::StandardNodule" if linkable else ""
+		__metadata[paramPath]["nodule:type"] = None if linkable else ""
 
 		# PlugValueWidget type from OSL "widget"
 		widget = None
@@ -173,19 +225,35 @@ def __translateNodeMetadata( nodeEntry ) :
 
 		page = __aiMetadataGetStr( nodeEntry, paramName, "page" )
 		if page is not None :
-			havePages = True
 			__metadata[paramPath]["layout:section"] = page
+
+			# Uncollapse sections if desired
+
+			collapsed = __aiMetadataGetBool( nodeEntry, None, "gaffer.layout.section.%s.collapsed" % page )
+			if collapsed == False :
+				parent = paramPath.rsplit( '.', 1 )[0]
+				__metadata[parent]["layout:section:%s:collapsed" % page] = collapsed
 
 		# Label from OSL "label"
 		label = __aiMetadataGetStr( nodeEntry, paramName, "label" )
-		if label is not None :
-			__metadata[paramPath]["label"] = label
-		elif "_" in paramName:
+		if label is None :
 			# Label from Arnold naming convention
 			# Arnold uses snake_case rather than camelCase for naming, so translate this into
 			# nice looking names
-			__metadata[paramPath]["label"] = " ".join( [ i.capitalize() for i in paramName.split( "_" ) ] )
+			label = " ".join( [ i.capitalize() for i in paramName.split( "_" ) ] )
 
+		__metadata[paramPath]["label"] = label
+		__metadata[paramPath]["noduleLayout:label"] = label
+
+		childComponents = {
+			arnold.AI_TYPE_VECTOR2 : "xy",
+			arnold.AI_TYPE_VECTOR : "xyz",
+			arnold.AI_TYPE_RGB : "rgb",
+			arnold.AI_TYPE_RGBA : "rgba",
+		}.get( paramType )
+		if childComponents is not None :
+			for c in childComponents :
+				__metadata["{}.{}".format( paramPath, c )]["noduleLayout:label"] = "{}.{}".format( label, c )
 
 		# GraphEditor visibility from Gaffer-specific metadata
 
@@ -193,6 +261,30 @@ def __translateNodeMetadata( nodeEntry ) :
 		visible = __aiMetadataGetBool( nodeEntry, paramName, "gaffer.graphEditorLayout.visible", visible )
 		if visible is not None :
 			__metadata[paramPath]["noduleLayout:visible"] = visible
+
+		userDefault = None
+		if paramType in [ arnold.AI_TYPE_BYTE, arnold.AI_TYPE_INT, arnold.AI_TYPE_UINT ]:
+			userDefault = __aiMetadataGetInt( nodeEntry, paramName, "gaffer.userDefault" )
+		elif paramType == arnold.AI_TYPE_BOOLEAN:
+			userDefault = __aiMetadataGetBool( nodeEntry, paramName, "gaffer.userDefault" )
+		elif paramType == arnold.AI_TYPE_FLOAT:
+			userDefault = __aiMetadataGetFlt( nodeEntry, paramName, "gaffer.userDefault" )
+		elif paramType == arnold.AI_TYPE_RGB:
+			userDefault = __aiMetadataGetRGB( nodeEntry, paramName, "gaffer.userDefault" )
+		#elif paramType == arnold.AI_TYPE_RGBA:
+		#	userDefault = __aiMetadataGetRGBA( nodeEntry, paramName, "gaffer.userDefault" )
+		elif paramType == arnold.AI_TYPE_VECTOR:
+			userDefault = __aiMetadataGetVec( nodeEntry, paramName, "gaffer.userDefault" )
+		elif paramType == arnold.AI_TYPE_VECTOR2:
+			userDefault = __aiMetadataGetVec2( nodeEntry, paramName, "gaffer.userDefault" )
+		elif paramType == arnold.AI_TYPE_STRING:
+			userDefault = __aiMetadataGetStr( nodeEntry, paramName, "gaffer.userDefault" )
+		elif paramType == arnold.AI_TYPE_ENUM:
+			userDefault = __aiMetadataGetStr( nodeEntry, paramName, "gaffer.userDefault" )
+
+		if userDefault:
+			__metadata[paramPath]["userDefault"] = userDefault
+			
 
 with IECoreArnold.UniverseBlock( writable = False ) :
 
@@ -231,12 +323,14 @@ def __nodeMetadata( node, name ) :
 
 def __plugMetadata( plug, name ) :
 
-	if name == "noduleLayout:visible" and plug.getInput() is not None :
+	if name == "noduleLayout:visible" and plug.getInput() is not None and not plug.node().getName().startswith( "__" ) :
 		# Before the introduction of nodule visibility controls,
 		# users may have made connections to plugs which are now
 		# hidden by default. Make sure we continue to show them
 		# by default - they can still be hidden explicitly by
 		# adding an instance metadata value.
+		# For private nodes this behaviour is skipped as their
+		# inputs might be driven by the parent.
 		return True
 
 	node = plug.node()
@@ -253,9 +347,10 @@ for nodeType in ( GafferArnold.ArnoldShader, GafferArnold.ArnoldLight ) :
 	nodeKeys = set()
 	parametersPlugKeys = set()
 	parameterPlugKeys = set()
+	parameterPlugComponentKeys = set()
 
 	for name, metadata in __metadata.items() :
-		keys = ( nodeKeys, parametersPlugKeys, parameterPlugKeys )[name.count( ".")]
+		keys = ( nodeKeys, parametersPlugKeys, parameterPlugKeys, parameterPlugComponentKeys )[name.count( "." )]
 		keys.update( metadata.keys() )
 
 	for key in nodeKeys :
@@ -267,8 +362,10 @@ for nodeType in ( GafferArnold.ArnoldShader, GafferArnold.ArnoldLight ) :
 	for key in parameterPlugKeys :
 		Gaffer.Metadata.registerValue( nodeType, "parameters.*", key, functools.partial( __plugMetadata, name = key ) )
 
-	Gaffer.Metadata.registerValue( nodeType, "description", __nodeDescription )
+	for key in parameterPlugComponentKeys :
+		Gaffer.Metadata.registerValue( nodeType, "parameters.*.[xyzrgb]", key, functools.partial( __plugMetadata, name = key ) )
 
+	Gaffer.Metadata.registerValue( nodeType, "description", __nodeDescription )
 
 Gaffer.Metadata.registerValue( GafferArnold.ArnoldShader, "attributeSuffix", "plugValueWidget:type", "GafferUI.StringPlugValueWidget" )
 Gaffer.Metadata.registerValue( GafferArnold.ArnoldShader, "layout:activator:suffixActivator", lambda parent : parent["type"].getValue() == "ai:lightFilter" )

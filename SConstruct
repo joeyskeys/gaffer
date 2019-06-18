@@ -51,7 +51,7 @@ import subprocess
 ###############################################################################################
 
 gafferMilestoneVersion = 0 # for announcing major milestones - may contain all of the below
-gafferMajorVersion = 53 # backwards-incompatible changes
+gafferMajorVersion = 54 # backwards-incompatible changes
 gafferMinorVersion = 0 # new backwards-compatible features
 gafferPatchVersion = 0 # bug fixes
 
@@ -278,6 +278,15 @@ options.Add(
 # general variables
 
 options.Add(
+	BoolVariable(
+		"GAFFERCORTEX",
+		"Builds and installs the GafferCortex modules. These are deprecated and will "
+		"be removed completely in a future version.",
+		True
+	)
+)
+
+options.Add(
 	"ENV_VARS_TO_IMPORT",
 	"By default SCons ignores the environment it is run in, to avoid it contaminating the "
 	"build process. This can be problematic if some of the environment is critical for "
@@ -414,11 +423,11 @@ elif env["PLATFORM"] == "posix" :
 env.Append( CXXFLAGS = [ "-std=$CXXSTD", "-fvisibility=hidden" ] )
 
 if env["BUILD_TYPE"] == "DEBUG" :
-	env.Append( CXXFLAGS = ["-g", "-O0"] )
+	env.Append( CXXFLAGS = ["-g", "-O0", "-DTBB_USE_DEBUG=1"] )
 elif env["BUILD_TYPE"] == "RELEASE" :
 	env.Append( CXXFLAGS = ["-DNDEBUG", "-DBOOST_DISABLE_ASSERTS", "-O3"] )
 elif env["BUILD_TYPE"] == "RELWITHDEBINFO" :
-	env.Append( CXXFLAGS = ["-DNDEBUG", "-DBOOST_DISABLE_ASSERTS", "-O3", "-g"] )
+	env.Append( CXXFLAGS = ["-DNDEBUG", "-DBOOST_DISABLE_ASSERTS", "-O3", "-g", "-fno-omit-frame-pointer"] )
 
 if env["WARNINGS_AS_ERRORS"] :
 	env.Append(
@@ -504,11 +513,16 @@ if not conf.checkQtVersion() :
 	sys.stderr.write( "Qt not found\n" )
 	Exit( 1 )
 
-if "clang++" in os.path.basename( env["CXX"] ) and env["ASAN"] :
+if env["ASAN"] :
 	env.Append(
-		CXXFLAGS = ["-fsanitize=address", "-shared-libasan"],
-		LINKFLAGS = ["-fsanitize=address", "-shared-libasan"]
+		CXXFLAGS = [ "-fsanitize=address" ],
+		LINKFLAGS = [ "-fsanitize=address" ],
 	)
+	if "clang++" in os.path.basename( env["CXX"] ) :
+		env.Append(
+			CXXFLAGS = [ "-shared-libasan" ],
+			LINKFLAGS = [ "-shared-libasan" ],
+		)
 
 ###############################################################################################
 # An environment for running commands with access to the applications we've built
@@ -638,6 +652,7 @@ libraries = {
 			"LIBS" : [ "GafferTest", "GafferBindings" ],
 		},
 		"additionalFiles" : glob.glob( "python/GafferTest/*/*" ) + glob.glob( "python/GafferTest/*/*/*" ),
+		"apps" : [ "cli", "env", "license", "python", "stats", "test" ],
 	},
 
 	"GafferUI" : {
@@ -650,9 +665,14 @@ libraries = {
 			 # this if we move to boost::signals2.
 			 "CXXFLAGS" : [ "-DQT_NO_KEYWORDS" ],
 		},
+		"apps" : [ "browser", "gui", "screengrab", "view" ],
 	},
 
-	"GafferUITest" : {},
+	"GafferUITest" : {
+
+		"additionalFiles" : glob.glob( "python/GafferUITest/scripts/*.gfr" ),
+
+	},
 
 	"GafferDispatch" : {
 		"envAppends" : {
@@ -661,6 +681,7 @@ libraries = {
 		"pythonEnvAppends" : {
 			"LIBS" : [ "GafferBindings", "GafferDispatch" ],
 		},
+		"apps" : [ "execute" ],
 	},
 
 	"GafferDispatchTest" : {
@@ -669,7 +690,9 @@ libraries = {
 
 	},
 
-	"GafferDispatchUI" : {},
+	"GafferDispatchUI" : {
+		"apps" : [ "dispatch" ],
+	},
 
 	"GafferDispatchUITest" : {},
 
@@ -680,15 +703,22 @@ libraries = {
 		"pythonEnvAppends" : {
 			"LIBS" : [ "GafferBindings", "GafferCortex", "GafferDispatch" ],
 		},
+		"requiredOptions" : [ "GAFFERCORTEX" ],
 	},
 
 	"GafferCortexTest" : {
 		"additionalFiles" : glob.glob( "python/GafferCortexTest/*/*" ) + glob.glob( "python/GafferCortexTest/*/*/*" ) + glob.glob( "python/GafferCortexTest/images/*" ),
+		"requiredOptions" : [ "GAFFERCORTEX" ],
 	},
 
-	"GafferCortexUI" : {},
+	"GafferCortexUI" : {
+		"apps" : [ "op" ],
+		"requiredOptions" : [ "GAFFERCORTEX" ],
+	},
 
-	"GafferCortexUITest" : {},
+	"GafferCortexUITest" : {
+		"requiredOptions" : [ "GAFFERCORTEX" ],
+	},
 
 	"GafferScene" : {
 		"envAppends" : {
@@ -736,7 +766,7 @@ libraries = {
 			"LIBS" : [ "Gaffer", "GafferImage", "OpenImageIO$OIIO_LIB_SUFFIX",  ],
 		},
 		"pythonEnvAppends" : {
-			"LIBS" : [ "GafferImage" ],
+			"LIBS" : [ "GafferImage", "GafferImageTest" ],
 		},
 		"additionalFiles" : glob.glob( "python/GafferImageTest/scripts/*" ) + glob.glob( "python/GafferImageTest/images/*" ) + glob.glob( "python/GafferImageTest/openColorIO/luts/*" ) + glob.glob( "python/GafferImageTest/openColorIO/*" ),
 	},
@@ -768,19 +798,24 @@ libraries = {
 	},
 
 	"GafferArnoldTest" : {
-		"additionalFiles" : glob.glob( "python/GafferArnoldTest/volumes/*" ) + glob.glob( "python/GafferArnoldTest/metadata/*" ),
+		"additionalFiles" : glob.glob( "python/GafferArnoldTest/volumes/*" ) + glob.glob( "python/GafferArnoldTest/metadata/*" ) + glob.glob( "python/GafferArnoldTest/images/*" ),
+		"requiredOptions" : [ "ARNOLD_ROOT" ],
 	},
 
 	"GafferArnoldUI" : {
 		"envAppends" : {
-			"LIBS" : [ "IECoreScene$CORTEX_LIB_SUFFIX", "IECoreGL$CORTEX_LIB_SUFFIX", "GafferOSL", "GafferSceneUI" ],
+			"LIBS" : [ "IECoreScene$CORTEX_LIB_SUFFIX", "IECoreGL$CORTEX_LIB_SUFFIX", "Gaffer", "GafferOSL", "GafferSceneUI" ],
 			},
 		"pythonEnvAppends" : {
 			"LIBS" : [ "GafferArnoldUI", "GafferSceneUI" ],
 		},
+		"requiredOptions" : [ "ARNOLD_ROOT" ],
 	},
 
-	"GafferArnoldUITest" : {},
+	"GafferArnoldUITest" : {
+		"additionalFiles" : glob.glob( "python/GafferArnoldUITest/metadata/*" ),
+		"requiredOptions" : [ "ARNOLD_ROOT" ],
+	},
 
 	"GafferOSL" : {
 		"envAppends" : {
@@ -789,13 +824,20 @@ libraries = {
 		},
 		"pythonEnvAppends" : {
 			"CPPPATH" : [ "$OSLHOME/include/OSL" ],
-			"LIBS" : [ "GafferBindings", "GafferScene", "GafferImage", "GafferOSL", "Iex$OPENEXR_LIB_SUFFIX" ],
+			"LIBS" : [ "GafferBindings", "GafferScene", "GafferImage", "GafferOSL", "Iex$OPENEXR_LIB_SUFFIX", "IECoreScene$CORTEX_LIB_SUFFIX" ],
 		},
 		"oslHeaders" : glob.glob( "shaders/*/*.h" ),
 		"oslShaders" : glob.glob( "shaders/*/*.osl" ),
 	},
 
-	"GafferOSLUI" : {},
+	"GafferOSLUI" : {
+		"envAppends" : {
+			"LIBS" : [ "Gaffer", "GafferUI", "GafferOSL" ],
+		},
+		"pythonEnvAppends" : {
+			"LIBS" : [ "IECoreGL$CORTEX_LIB_SUFFIX", "GafferBindings", "GafferScene", "GafferUI", "GafferImageUI", "GafferOSLUI" ],
+		},
+	},
 
 	"GafferOSLTest" : {
 		"additionalFiles" : glob.glob( "python/GafferOSLTest/*/*" ),
@@ -878,16 +920,8 @@ libraries = {
 		"additionalFiles" : glob.glob( "python/GafferVDBUITest/*/*" ),
 	},
 
-	"apps" : {
-		"additionalFiles" : glob.glob( "apps/*/*-1.py" ),
-	},
-
 	"scripts" : {
 		"additionalFiles" : [ "bin/gaffer", "bin/gaffer.py" ],
-	},
-
-	"startupScripts" : {
-		"additionalFiles" : glob.glob( "startup/*/*.py" ),
 	},
 
 	"misc" : {
@@ -1062,6 +1096,19 @@ for libraryName, libraryDef in libraries.items() :
 	for pythonFile in pythonFiles :
 		pythonFileInstall = env.Command( "$BUILD_DIR/" + pythonFile, pythonFile, "sed \"" + sedSubstitutions + "\" $SOURCE > $TARGET" )
 		env.Alias( "build", pythonFileInstall )
+
+	# apps
+
+	for app in libraryDef.get( "apps", [] ) :
+		appInstall = env.InstallAs("$BUILD_DIR/apps/{app}/{app}-1.py".format( app=app ), "apps/{app}/{app}-1.py".format( app=app ) )
+		env.Alias( "build", appInstall )
+
+	# startup files
+
+	for startupDir in libraryDef.get( "apps", [] ) + [ libraryName ] :
+		for startupFile in glob.glob( "startup/{startupDir}/*.py".format( startupDir=startupDir ) ) :
+			startupFileInstall = env.InstallAs( "$BUILD_DIR/" + startupFile, startupFile )
+			env.Alias( "build", startupFileInstall )
 
 	# additional files
 
@@ -1291,6 +1338,20 @@ if conf.checkSphinx() :
 else :
 
 	sys.stderr.write( "WARNING : Sphinx not found - not building docs. Check SPHINX build variable.\n" )
+
+#########################################################################################################
+# Example files
+#########################################################################################################
+
+exampleFiles = []
+for ext in ( 'gfr', 'grf', 'png' ) :
+	exampleFiles += glob.glob( "doc/examples/*.%s" % ext )
+	exampleFiles += glob.glob( "doc/examples/*/*.%s" % ext )
+	exampleFiles += glob.glob( "doc/examples/*/*/*.%s" % ext )
+
+for f in exampleFiles :
+	fileInstall = env.Command( f.replace( "doc/", "$BUILD_DIR/resources/", 1 ), f, Copy( "$TARGET", "$SOURCE" ) )
+	env.Alias( "build", fileInstall )
 
 #########################################################################################################
 # Installation

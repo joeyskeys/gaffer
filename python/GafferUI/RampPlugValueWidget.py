@@ -57,7 +57,7 @@ class RampPlugValueWidget( GafferUI.PlugValueWidget ) :
 				drawModeWidget.append( "Ramp" )
 				drawModeWidget.append( "Curves" )
 				drawModeWidget.setSelection( "Ramp" )
-				self.__drawModeChangedConnection = drawModeWidget.selectionChangedSignal().connect( Gaffer.WeakMethod( self.__drawModeChanged ) )
+				drawModeWidget.selectionChangedSignal().connect( Gaffer.WeakMethod( self.__drawModeChanged ), scoped = False )
 
 				GafferUI.Spacer( imath.V2i( 0 ), parenting = { "expand" : True } )
 
@@ -65,7 +65,7 @@ class RampPlugValueWidget( GafferUI.PlugValueWidget ) :
 				# metadata on this child plug right before constructing a widget for it.  There should probably
 				# be some way to do this genericly during initialization
 				Gaffer.Metadata.registerValue( plug['interpolation'],
-					"plugValueWidget:type", "GafferUI.PresetsPlugValueWidget", persistent=False )  
+					"plugValueWidget:type", "GafferUI.PresetsPlugValueWidget", persistent=False )
 				for name, value in sorted( Gaffer.SplineDefinitionInterpolation.names.items() ):
 					Gaffer.Metadata.registerValue( plug['interpolation'], "preset:" + name, value, persistent=False )
 
@@ -81,9 +81,9 @@ class RampPlugValueWidget( GafferUI.PlugValueWidget ) :
 			self.__slider = GafferUI.Slider()
 			self.__slider.setSizeEditable( True )
 			self.__slider.setMinimumSize( 2 )
-			self.__positionsChangedConnection = self.__slider.positionChangedSignal().connect( Gaffer.WeakMethod( self.__positionsChanged ) )
-			self.__indexRemovedConnection = self.__slider.indexRemovedSignal().connect( Gaffer.WeakMethod( self.__indexRemoved ) )
-			self.__selectedIndexChangedConnection = self.__slider.selectedIndexChangedSignal().connect( Gaffer.WeakMethod( self.__selectedIndexChanged ) )
+			self.__positionsChangedConnection = self.__slider.positionChangedSignal().connect( Gaffer.WeakMethod( self.__positionsChanged ), scoped = False )
+			self.__slider.indexRemovedSignal().connect( Gaffer.WeakMethod( self.__indexRemoved ), scoped = False )
+			self.__slider.selectedIndexChangedSignal().connect( Gaffer.WeakMethod( self.__selectedIndexChanged ), scoped = False )
 
 			self.__lastPositionChangedReason = None
 			self.__positionsMergeGroupId = 0
@@ -116,12 +116,13 @@ class RampPlugValueWidget( GafferUI.PlugValueWidget ) :
 		result = GafferUI.PlugValueWidget.getToolTip( self )
 
 		if self.getPlug() is not None :
-			result += "<ul>"
-			result += "<li>Click empty space in slider to add handle"
-			result += "<li>Click handle to select"
-			result += "<li>Delete to remove selected handle"
-			result += "<li>Cursor left/right to nudge selected handle"
-			result += "<ul>"
+			if result :
+				result += "\n"
+			result += "## Actions\n\n"
+			result += "- Click empty space in slider to add handle\n"
+			result += "- Click handle to select\n"
+			result += "- Delete to remove selected handle\n"
+			result += "- Cursor left/right to nudge selected handle\n"
 
 		return result
 

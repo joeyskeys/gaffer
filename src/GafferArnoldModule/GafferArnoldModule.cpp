@@ -40,6 +40,7 @@
 #include "GafferArnold/ArnoldAtmosphere.h"
 #include "GafferArnold/ArnoldAttributes.h"
 #include "GafferArnold/ArnoldBackground.h"
+#include "GafferArnold/ArnoldCameraShaders.h"
 #include "GafferArnold/ArnoldDisplacement.h"
 #include "GafferArnold/ArnoldLight.h"
 #include "GafferArnold/ArnoldMeshLight.h"
@@ -47,6 +48,7 @@
 #include "GafferArnold/ArnoldRender.h"
 #include "GafferArnold/ArnoldShader.h"
 #include "GafferArnold/ArnoldVDB.h"
+#include "GafferArnold/ArnoldLightFilter.h"
 #include "GafferArnold/InteractiveArnoldRender.h"
 
 #include "GafferDispatchBindings/TaskNodeBinding.h"
@@ -78,10 +80,12 @@ BOOST_PYTHON_MODULE( _GafferArnold )
 		.def( "loadShader", (void (ArnoldLight::*)( const std::string & ) )&ArnoldLight::loadShader )
 	;
 
+	GafferBindings::DependencyNodeClass<ArnoldLightFilter>();
 	GafferBindings::DependencyNodeClass<ArnoldOptions>();
 	GafferBindings::DependencyNodeClass<ArnoldAttributes>();
 	GafferBindings::DependencyNodeClass<ArnoldVDB>();
 	GafferBindings::DependencyNodeClass<ArnoldDisplacement>();
+	GafferBindings::DependencyNodeClass<ArnoldCameraShaders>();
 	GafferBindings::DependencyNodeClass<ArnoldMeshLight>();
 	GafferBindings::DependencyNodeClass<ArnoldAOVShader>();
 	GafferBindings::NodeClass<InteractiveArnoldRender>()

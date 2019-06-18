@@ -183,16 +183,11 @@ class TaskNodeTest( GafferTest.TestCase ) :
 		c2.setFrame( 2 )
 
 		n = GafferDispatchTest.LoggingTaskNode()
-		n2 = GafferDispatchTest.LoggingTaskNode()
-
-		# make n2 require n
-		n2["preTasks"][0].setInput( n["task"] )
 
 		with c1 :
-			self.assertEqual( n["task"].preTasks(), [] )
-			self.assertEqual( n2["task"].preTasks(), [ GafferDispatch.TaskNode.Task( n, c1 ) ] )
+			self.assertEqual( n["task"].preTasks(), [ GafferDispatch.TaskNode.Task( n["preTasks"][0], c1 ) ] )
 		with c2 :
-			self.assertEqual( n2["task"].preTasks(), [ GafferDispatch.TaskNode.Task( n, c2 ) ] )
+			self.assertEqual( n["task"].preTasks(), [ GafferDispatch.TaskNode.Task( n["preTasks"][0], c2 ) ] )
 
 	def testTaskConstructors( self ) :
 
@@ -202,13 +197,16 @@ class TaskNodeTest( GafferTest.TestCase ) :
 		t = GafferDispatch.TaskNode.Task( n, c )
 		t2 = GafferDispatch.TaskNode.Task( n, c )
 		t3 = GafferDispatch.TaskNode.Task( t2 )
+		t4 = GafferDispatch.TaskNode.Task( n["task"], c )
 
-		self.assertEqual( t.node(), n )
+		self.assertEqual( t.plug(), n["task"] )
 		self.assertEqual( t.context(), c )
-		self.assertEqual( t2.node(), n )
+		self.assertEqual( t2.plug(), n["task"] )
 		self.assertEqual( t2.context(), c )
-		self.assertEqual( t3.node(), n )
+		self.assertEqual( t3.plug(), n["task"] )
 		self.assertEqual( t3.context(), c )
+		self.assertEqual( t4.plug(), n["task"] )
+		self.assertEqual( t4.context(), c )
 
 	def testTaskComparison( self ) :
 
@@ -229,68 +227,6 @@ class TaskNodeTest( GafferTest.TestCase ) :
 		self.assertNotEqual( t3, t1 )
 		self.assertNotEqual( t3, t4 )
 		self.assertNotEqual( t4, t3 )
-
-	def testTaskSet( self ) :
-
-		# A no-op TaskNode doesn't actually compute anything, so all tasks are the same
-		c = Gaffer.Context()
-		n = GafferDispatchTest.LoggingTaskNode()
-		n["noOp"].setValue( True )
-		t1 = GafferDispatch.TaskNode.Task( n, c )
-		t2 = GafferDispatch.TaskNode.Task( n, c )
-		self.assertEqual( t1, t2 )
-		c2 = Gaffer.Context()
-		c2["a"] = 2
-		t3 = GafferDispatch.TaskNode.Task( n, c2 )
-		self.assertEqual( t1, t3 )
-		n2 = GafferDispatchTest.LoggingTaskNode()
-		n2["noOp"].setValue( True )
-		t4 = GafferDispatch.TaskNode.Task( n2, c2 )
-		self.assertEqual( t1, t4 )
-		t5 = GafferDispatch.TaskNode.Task( n2, c )
-		self.assertEqual( t1, t5 )
-
-		s = set( [ t1, t2, t3, t4, t4, t4, t1, t2, t4, t3, t2 ] )
-		# there should only be 1 task because they all have identical results
-		self.assertEqual( len(s), 1 )
-		self.assertEqual( s, set( [ t1 ] ) )
-		self.assertTrue( t1 in s )
-		self.assertTrue( t2 in s )
-		self.assertTrue( t3 in s )
-		self.assertTrue( t4 in s )
-		# even t5 is in there, because it's really the same task
-		self.assertTrue( t5 in s )
-
-		# MyNode.hash() depends on the context time, so tasks will vary
-		my = GafferDispatchTest.LoggingTaskNode()
-		my["frameSensitivePlug"] = Gaffer.StringPlug( defaultValue = "####" )
-		c.setFrame( 1 )
-		t1 = GafferDispatch.TaskNode.Task( my, c )
-		t2 = GafferDispatch.TaskNode.Task( my, c )
-		self.assertEqual( t1, t2 )
-		c2 = Gaffer.Context()
-		c2.setFrame( 2 )
-		t3 = GafferDispatch.TaskNode.Task( my, c2 )
-		self.assertNotEqual( t1, t3 )
-		my2 = GafferDispatchTest.LoggingTaskNode()
-		my2["frameSensitivePlug"] = Gaffer.StringPlug( defaultValue = "####" )
-		t4 = GafferDispatch.TaskNode.Task( my2, c2 )
-		self.assertNotEqual( t1, t4 )
-		self.assertEqual( t3, t4 )
-		t5 = GafferDispatch.TaskNode.Task( my2, c )
-		self.assertEqual( t1, t5 )
-		self.assertNotEqual( t3, t5 )
-
-		s = set( [ t1, t2, t3, t4, t4, t4, t1, t2, t4, t3, t2 ] )
-		# t1 and t3 are the only distinct tasks
-		self.assertEqual( len(s), 2 )
-		self.assertEqual( s, set( [ t1, t3 ] ) )
-		# but they still all have equivalent tasks in the set
-		self.assertTrue( t1 in s )
-		self.assertTrue( t2 in s )
-		self.assertTrue( t3 in s )
-		self.assertTrue( t4 in s )
-		self.assertTrue( t5 in s )
 
 	def testInputAcceptanceInsideBoxes( self ) :
 
@@ -416,18 +352,13 @@ class TaskNodeTest( GafferTest.TestCase ) :
 
 	def testPostTasks( self ) :
 
-		preWriter = GafferDispatchTest.TextWriter()
-		postWriter = GafferDispatchTest.TextWriter()
-
 		writer = GafferDispatchTest.TextWriter()
-		writer["preTasks"][0].setInput( preWriter["task"] )
-		writer["postTasks"][0].setInput( postWriter["task"] )
 
 		c = Gaffer.Context()
 		c["test"] = "test"
 		with c :
-			self.assertEqual( writer["task"].preTasks(), [ GafferDispatch.TaskNode.Task( preWriter, c ) ] )
-			self.assertEqual( writer["task"].postTasks(), [ GafferDispatch.TaskNode.Task( postWriter, c ) ] )
+			self.assertEqual( writer["task"].preTasks(), [ GafferDispatch.TaskNode.Task( writer["preTasks"][0], c ) ] )
+			self.assertEqual( writer["task"].postTasks(), [ GafferDispatch.TaskNode.Task( writer["postTasks"][0], c ) ] )
 
 	def testLoadNetworkFromVersion0_19( self ) :
 
@@ -568,14 +499,17 @@ class TaskNodeTest( GafferTest.TestCase ) :
 		s["n3"]["postTasks"][0].setInput( s["n2"]["task"] )
 
 		preTasks = s["n3"]["task"].preTasks()
-		self.assertEqual( len( preTasks ), 1 )
-		self.assertEqual( preTasks[0].node(), s["n1"] )
+		self.assertEqual( len( preTasks ), 2 )
+		self.assertEqual( preTasks[0].plug(), s["n3"]["internalTask"]["preTasks"][0] )
+		self.assertEqual( preTasks[1].plug(), s["n3"]["internalTask"]["preTasks"][1] )
 
 		postTasks = s["n3"]["task"].postTasks()
-		self.assertEqual( len( postTasks ), 1 )
-		self.assertEqual( postTasks[0].node(), s["n2"] )
+		self.assertEqual( len( postTasks ), 2 )
+		self.assertEqual( postTasks[0].plug(), s["n3"]["internalTask"]["postTasks"][0] )
+		self.assertEqual( postTasks[1].plug(), s["n3"]["internalTask"]["postTasks"][1] )
 
 		dispatcher = GafferDispatchTest.DispatcherTest.TestDispatcher()
+		dispatcher["jobsDirectory"].setValue( self.temporaryDirectory() )
 		dispatcher.dispatch( [ s["n3"] ] )
 
 		self.assertEqual( len( log ), 3 )

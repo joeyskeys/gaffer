@@ -93,7 +93,7 @@ class StandardNodeGadget::ErrorGadget : public Gadget
 			entry.error = error;
 			if( !entry.parentChangedConnection.connected() )
 			{
-				entry.parentChangedConnection = plug->parentChangedSignal().connect( boost::bind( &ErrorGadget::parentChanged, this, ::_1 ) );
+				entry.parentChangedConnection = plug->parentChangedSignal().connect( boost::bind( &ErrorGadget::plugParentChanged, this, ::_1 ) );
 			}
 			m_image->setVisible( true );
 		}
@@ -117,6 +117,10 @@ class StandardNodeGadget::ErrorGadget : public Gadget
 			{
 				if( reported.find( it->second.error ) == reported.end() )
 				{
+					if( result.size() )
+					{
+						result += "\n";
+					}
 					result += it->second.error;
 					reported.insert( it->second.error );
 				}
@@ -126,7 +130,7 @@ class StandardNodeGadget::ErrorGadget : public Gadget
 
 	private :
 
-		void parentChanged( GraphComponent *plug )
+		void plugParentChanged( GraphComponent *plug )
 		{
 			if( !plug->parent() )
 			{
@@ -154,30 +158,17 @@ class StandardNodeGadget::ErrorGadget : public Gadget
 namespace
 {
 
-IECoreGL::Texture *bookmarkTexture()
-{
-	static IECoreGL::TexturePtr bookmarkTexture;
-
-	if( !bookmarkTexture )
-	{
-		bookmarkTexture = ImageGadget::textureLoader()->load( "bookmark.png" );
-
-		IECoreGL::Texture::ScopedBinding binding( *bookmarkTexture );
-		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR );
-		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
-		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER );
-		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER );
-	}
-	return bookmarkTexture.get();
-}
-
 bool canConnect( const DragDropEvent &event, const ConnectionCreator *destination )
 {
 	if( auto plug = IECore::runTimeCast<const Plug>( event.data.get() ) )
 	{
-		return destination->canCreateConnection( plug );
+		if( destination->canCreateConnection( plug ) )
+		{
+			return true;
+		}
 	}
-	else if( auto sourceCreator = IECore::runTimeCast<const ConnectionCreator>( event.sourceGadget.get() ) )
+
+	if( auto sourceCreator = IECore::runTimeCast<const ConnectionCreator>( event.sourceGadget.get() ) )
 	{
 		if( auto destinationNodule = IECore::runTimeCast<const Nodule>( destination ) )
 		{
@@ -191,10 +182,15 @@ void connect( const DragDropEvent &event, ConnectionCreator *destination )
 {
 	if( auto plug = IECore::runTimeCast<Plug>( event.data.get() ) )
 	{
-		UndoScope undoScope( plug->ancestor<ScriptNode>() );
-		destination->createConnection( plug );
+		if( destination->canCreateConnection( plug ) )
+		{
+			UndoScope undoScope( plug->ancestor<ScriptNode>() );
+			destination->createConnection( plug );
+			return;
+		}
 	}
-	else if( auto sourceCreator = IECore::runTimeCast<ConnectionCreator>( event.sourceGadget.get() ) )
+
+	if( auto sourceCreator = IECore::runTimeCast<ConnectionCreator>( event.sourceGadget.get() ) )
 	{
 		if( auto destinationNodule = IECore::runTimeCast<Nodule>( destination ) )
 		{
@@ -400,18 +396,14 @@ void StandardNodeGadget::doRenderLayer( Layer layer, const Style *style ) const
 				m_userColor.get_ptr()
 			);
 
-			if( MetadataAlgo::getBookmarked( node() ) )
-			{
-				style->renderImage( Box2f( V2f( b.min.x + 1.125, b.max.y - 1.25 ), V2f( b.min.x + 1.875, b.max.y + 0.25 ) ), bookmarkTexture() );
-			}
-
 			break;
 		}
 		case GraphLayer::Overlay :
 		{
+			const Box3f b = bound();
+
 			if( !m_nodeEnabled && !IECoreGL::Selector::currentSelector() )
 			{
-				const Box3f b = bound();
 				/// \todo Replace renderLine() with a specific method (renderNodeStrikeThrough?) on the Style class
 				/// so that styles can do customised drawing based on knowledge of what is being drawn.
 				style->renderLine( IECore::LineSegment3f( V3f( b.min.x, b.min.y, 0 ), V3f( b.max.x, b.max.y, 0 ) ) );
@@ -750,6 +742,11 @@ ConnectionCreator *StandardNodeGadget::closestDragDestination( const DragDropEve
 		}
 
 		const Box3f bound = (*it)->transformedBound( this );
+		if( bound.isEmpty() )
+		{
+			continue;
+		}
+
 		const V3f closestPoint = closestPointOnBox( event.line.p0, bound );
 		const float dist = ( closestPoint - event.line.p0 ).length2();
 		if( dist < maxDist )
@@ -795,10 +792,6 @@ void StandardNodeGadget::nodeMetadataChanged( IECore::TypeId nodeTypeId, IECore:
 		{
 			requestRender();
 		}
-	}
-	else if( MetadataAlgo::bookmarkedAffectedByChange( key ) )
-	{
-		requestRender();
 	}
 }
 
@@ -947,7 +940,7 @@ void StandardNodeGadget::error( const Gaffer::Plug *plug, const Gaffer::Plug *so
 	{
 		header = "Error on upstream node " + source->node()->relativeName( source->ancestor<ScriptNode>() );
 	}
-	header = "<h3>" + header + "</h3>";
+	header = "# " + header + "\n\n";
 
 	// We could be on any thread at this point, so we
 	// use an idle callback to do the work of displaying the error

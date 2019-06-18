@@ -115,18 +115,34 @@ GAFFER_API bool getBookmarked( const Node *node );
 GAFFER_API bool bookmarkedAffectedByChange( const IECore::InternedString &changedKey );
 GAFFER_API void bookmarks( const Node *node, std::vector<NodePtr> &bookmarks );
 
+/// Numeric Bookmarks
+/// =================
+///
+/// Each script has a set of numeric bookmarks numbered 1-9, each of which can
+//  have a single node assigned. Reassigning a numeric bookmark will
+/// consequently remove it from another node. Nodes can be assigned to a
+/// single numeric bookmark at a time.
+/// The following functions throw if given bookmark is not in {1, ..., 9}.
+
+/// \undoable, pass a nullptr to remove the bookmark.
+GAFFER_API void setNumericBookmark( ScriptNode *script, int bookmark, Node *node );
+GAFFER_API Node *getNumericBookmark( ScriptNode *script, int bookmark );
+/// Returns 0 if the node isn't assigned, the bookmark otherwise.
+GAFFER_API int numericBookmark( const Node *node );
+GAFFER_API bool numericBookmarkAffectedByChange( const IECore::InternedString &changedKey );
+
 /// Utilities
 /// =========
 
 /// Determines if a metadata value change (as signalled by `Metadata::plugValueChangedSignal()`
 /// or `Metadata:nodeValueChangedSignal()`) affects a given plug or node.
-GAFFER_API bool affectedByChange( const Plug *plug, IECore::TypeId changedNodeTypeId, const IECore::StringAlgo::MatchPattern &changedPlugPath, const Gaffer::Plug *changedPlug );
+GAFFER_API bool affectedByChange( const Plug *plug, IECore::TypeId changedTypeId, const IECore::StringAlgo::MatchPattern &changedPlugPath, const Gaffer::Plug *changedPlug );
 GAFFER_API bool affectedByChange( const Node *node, IECore::TypeId changedNodeTypeId, const Gaffer::Node *changedNode );
 /// As above, but determines if any child will be affected.
-GAFFER_API bool childAffectedByChange( const GraphComponent *parent, IECore::TypeId changedNodeTypeId, const IECore::StringAlgo::MatchPattern &changedPlugPath, const Gaffer::Plug *changedPlug );
+GAFFER_API bool childAffectedByChange( const GraphComponent *parent, IECore::TypeId changedTypeId, const IECore::StringAlgo::MatchPattern &changedPlugPath, const Gaffer::Plug *changedPlug );
 GAFFER_API bool childAffectedByChange( const GraphComponent *parent, IECore::TypeId changedNodeTypeId, const Gaffer::Node *changedNode );
 /// As above, but determines if any ancestor will be affected.
-GAFFER_API bool ancestorAffectedByChange( const Plug *plug, IECore::TypeId changedNodeTypeId, const IECore::StringAlgo::MatchPattern &changedPlugPath, const Gaffer::Plug *changedPlug );
+GAFFER_API bool ancestorAffectedByChange( const Plug *plug, IECore::TypeId changedTypeId, const IECore::StringAlgo::MatchPattern &changedPlugPath, const Gaffer::Plug *changedPlug );
 GAFFER_API bool ancestorAffectedByChange( const GraphComponent *graphComponent, IECore::TypeId changedNodeTypeId, const Gaffer::Node *changedNode );
 
 /// Copies metadata from one target to another. The exclude pattern is used with StringAlgo::matchMultiple().

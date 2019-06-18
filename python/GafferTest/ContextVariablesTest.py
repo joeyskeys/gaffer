@@ -56,7 +56,7 @@ class ContextVariablesTest( GafferTest.TestCase ) :
 		n["in"].setValue( "$a" )
 		self.assertEqual( c["out"].getValue(), "" )
 
-		c["variables"].addMember( "a", IECore.StringData( "A" ) )
+		c["variables"].addChild( Gaffer.NameValuePlug( "a", IECore.StringData( "A" ), flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ) )
 		self.assertEqual( c["out"].getValue(), "A" )
 
 	def testDirtyPropagation( self ) :
@@ -69,7 +69,7 @@ class ContextVariablesTest( GafferTest.TestCase ) :
 
 		# adding a variable should dirty the output:
 		dirtied = GafferTest.CapturingSlot( c.plugDirtiedSignal() )
-		c["variables"].addMember( "a", IECore.StringData( "A" ) )
+		c["variables"].addChild( Gaffer.NameValuePlug( "a", IECore.StringData( "A" ), "member1", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ) )
 		self.failUnless( c["out"] in [ p[0] for p in dirtied ] )
 
 		# modifying the variable should dirty the output:
@@ -94,7 +94,7 @@ class ContextVariablesTest( GafferTest.TestCase ) :
 		s["n"]["in"].setValue( "$a" )
 		self.assertEqual( s["c"]["out"].getValue(), "" )
 
-		s["c"]["variables"].addMember( "a", IECore.StringData( "A" ) )
+		s["c"]["variables"].addChild( Gaffer.NameValuePlug( "a", IECore.StringData( "A" ), flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ) )
 		self.assertEqual( s["c"]["out"].getValue(), "A" )
 
 		s2 = Gaffer.ScriptNode()
@@ -121,7 +121,7 @@ class ContextVariablesTest( GafferTest.TestCase ) :
 		self.assertEqual( s["c"]["out"].getValue(), "A" )
 
 		# Extra variables trump regular variables of the same name
-		s["c"]["variables"].addMember( "a", IECore.StringData( "B" ) )
+		s["c"]["variables"].addChild( Gaffer.NameValuePlug( "a", IECore.StringData( "B" ) ) )
 		self.assertEqual( s["c"]["out"].getValue(), "A" )
 
 		s2 = Gaffer.ScriptNode()
@@ -180,6 +180,25 @@ class ContextVariablesTest( GafferTest.TestCase ) :
 
 		self.assertEqual( len( cs ), 2 )
 		self.assertEqual( { x[0] for x in cs }, { c["enabled"], c["out"] } )
+
+	def testSerialisationUsesSetup( self ) :
+
+		s1 = Gaffer.ScriptNode()
+		s1["c"] = Gaffer.ContextVariables()
+		s1["c"].setup( Gaffer.IntPlug() )
+
+		ss = s1.serialise()
+		self.assertIn( "setup", ss )
+		self.assertEqual( ss.count( "addChild" ), 1 )
+		self.assertNotIn( "Dynamic", ss )
+		self.assertNotIn( "setInput", ss )
+
+		s2 = Gaffer.ScriptNode()
+		s2.execute( ss )
+		self.assertIn( "in", s2["c"] )
+		self.assertIn( "out", s2["c"] )
+		self.assertIsInstance( s2["c"]["in"], Gaffer.IntPlug )
+		self.assertIsInstance( s2["c"]["out"], Gaffer.IntPlug )
 
 if __name__ == "__main__":
 	unittest.main()

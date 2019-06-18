@@ -53,12 +53,70 @@ using namespace GafferBindings;
 namespace
 {
 
-template<typename T>
-void setup( T &n, const ValuePlug &plug )
+IECore::InternedString g_inPlugName( "in" );
+IECore::InternedString g_outPlugName( "out" );
+
+void setupContextProcessor( ContextProcessor &n, const Plug &plug )
 {
 	IECorePython::ScopedGILRelease gilRelease;
 	n.setup( &plug );
 }
+
+void setupLoop( Loop &n, const ValuePlug &plug )
+{
+	IECorePython::ScopedGILRelease gilRelease;
+	n.setup( &plug );
+}
+
+ContextPtr inPlugContext( const ContextProcessor &n )
+{
+	IECorePython::ScopedGILRelease gilRelease;
+	return n.inPlugContext();
+}
+
+class SetupBasedNodeSerialiser : public NodeSerialiser
+{
+
+	bool childNeedsConstruction( const Gaffer::GraphComponent *child, const Serialisation &serialisation ) const override
+	{
+		const Node *node = child->parent<Node>();
+		if( child == node->getChild( g_inPlugName ) || child == node->getChild( g_outPlugName ) )
+		{
+			// We'll serialise a `setup()` call to construct these.
+			return false;
+		}
+		return NodeSerialiser::childNeedsConstruction( child, serialisation );
+	}
+
+	std::string postConstructor( const Gaffer::GraphComponent *graphComponent, const std::string &identifier, const Serialisation &serialisation ) const override
+	{
+		std::string result = NodeSerialiser::postConstructor( graphComponent, identifier, serialisation );
+
+		auto node = static_cast<const Node *>( graphComponent );
+		const Plug *inPlug = node->getChild<Plug>( g_inPlugName );
+		if( !inPlug )
+		{
+			// `setup()` hasn't been called yet.
+			return result;
+		}
+
+		if( result.size() )
+		{
+			result += "\n";
+		}
+
+		// Add a call to `setup()` to recreate the plugs.
+
+		PlugPtr plug = inPlug->createCounterpart( g_inPlugName, Plug::In );
+		plug->setFlags( Plug::Dynamic, false );
+
+		const Serialiser *plugSerialiser = Serialisation::acquireSerialiser( plug.get() );
+		result += identifier + ".setup( " + plugSerialiser->constructor( plug.get(), serialisation ) + " )\n";
+
+		return result;
+	}
+
+};
 
 } // namespace
 
@@ -66,15 +124,19 @@ void GafferModule::bindContextProcessor()
 {
 
 	DependencyNodeClass<Loop>()
-		.def( "setup", &setup<Loop> )
+		.def( "setup", &setupLoop )
 	;
 
 	DependencyNodeClass<ContextProcessor>()
-		.def( "setup", &setup<ContextProcessor> )
+		.def( "setup", &setupContextProcessor )
+		.def( "inPlugContext", &inPlugContext )
 	;
 
 	DependencyNodeClass<TimeWarp>();
 	DependencyNodeClass<ContextVariables>();
 	DependencyNodeClass<DeleteContextVariables>();
+
+	Serialisation::registerSerialiser( Loop::staticTypeId(), new SetupBasedNodeSerialiser );
+	Serialisation::registerSerialiser( ContextProcessor::staticTypeId(), new SetupBasedNodeSerialiser );
 
 }

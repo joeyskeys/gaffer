@@ -64,13 +64,11 @@ class ArnoldShaderTest( GafferSceneTest.SceneTestCase ) :
 		n = GafferArnold.ArnoldShader()
 		n.loadShader( "utility" )
 
-		s = n.attributes()["ai:surface"]
-		self.failUnless( isinstance( s, IECore.ObjectVector ) )
-		self.assertEqual( len( s ), 1 )
-		self.failUnless( isinstance( s[0], IECoreScene.Shader ) )
+		network = n.attributes()["ai:surface"]
+		self.failUnless( isinstance( network, IECoreScene.ShaderNetwork ) )
+		self.assertEqual( len( network ), 1 )
 
-		s = s[0]
-		self.assertEqual( s.name, "utility" )
+		self.assertEqual( network.outputShader().name, "utility" )
 
 	def testParameterRepresentation( self ) :
 
@@ -94,7 +92,7 @@ class ArnoldShaderTest( GafferSceneTest.SceneTestCase ) :
 		n["parameters"]["raster_space"].setValue( False )
 		n["parameters"]["edge_type"].setValue( "polygons" )
 
-		s = n.attributes()["ai:surface"][0]
+		s = n.attributes()["ai:surface"].outputShader()
 		self.assertEqual( s.parameters["line_width"], IECore.FloatData( 10 ) )
 		self.assertEqual( s.parameters["fill_color"], IECore.Color3fData( imath.Color3f( .25, .5, 1 ) ) )
 		self.assertEqual( s.parameters["line_color"], IECore.Color3fData( imath.Color3f( 0 ) ) )
@@ -135,34 +133,30 @@ class ArnoldShaderTest( GafferSceneTest.SceneTestCase ) :
 
 	def testShaderNetwork( self ) :
 
-		s = GafferArnold.ArnoldShader()
+		s = GafferArnold.ArnoldShader( "surface" )
 		s.loadShader( "standard_surface" )
 
-		n = GafferArnold.ArnoldShader()
+		n = GafferArnold.ArnoldShader( "noise" )
 		n.loadShader( "noise" )
 
 		s["parameters"]["base_color"].setInput( n["out"] )
 		s["parameters"]["specular_color"].setInput( n["out"] )
 
-		st = s.attributes()["ai:surface"]
-		self.assertEqual( len( st ), 2 )
+		network = s.attributes()["ai:surface"]
+		self.assertEqual( len( network ), 2 )
 
-		self.assertEqual( st[0].type, "ai:shader" )
-		self.assertEqual( st[0].name, "noise" )
-		self.failUnless( "__handle" in st[0].parameters )
+		self.assertEqual( network.getShader( "noise" ).type, "ai:shader" )
+		self.assertEqual( network.getShader( "noise" ).name, "noise" )
 
-		self.assertEqual( st[1].type, "ai:surface" )
-		self.assertEqual( st[1].name, "standard_surface" )
-		self.failIf( "__handle" in st[1].parameters )
+		self.assertEqual( network.getShader( "surface" ).type, "ai:surface" )
+		self.assertEqual( network.getShader( "surface" ).name, "standard_surface" )
 
 		self.assertEqual(
-			st[1].parameters["base_color"].value,
-			"link:" + st[0].parameters["__handle"].value
-		)
-
-		self.assertEqual(
-			st[1].parameters["specular_color"].value,
-			"link:" + st[0].parameters["__handle"].value
+			network.inputConnections( "surface" ),
+			[
+				network.Connection( ( "noise", "" ), ( "surface", "base_color" ) ),
+				network.Connection( ( "noise", "" ), ( "surface", "specular_color" ) ),
+			]
 		)
 
 	def testShaderNetworkRender( self ) :
@@ -298,7 +292,7 @@ class ArnoldShaderTest( GafferSceneTest.SceneTestCase ) :
 		s["parameters"]["input1"].setValue( imath.Color3f( 0.1, 0.2, 0.3 ) )
 		s["parameters"]["input2"].setInput( s["parameters"]["input1"] )
 
-		shader = s.attributes()["ai:surface"][0]
+		shader = s.attributes()["ai:surface"].outputShader()
 
 		self.assertEqual( shader.parameters["input1"].value, imath.Color3f( 0.1, 0.2, 0.3 ) )
 		self.assertEqual( shader.parameters["input2"].value, imath.Color3f( 0.1, 0.2, 0.3 ) )
@@ -311,7 +305,7 @@ class ArnoldShaderTest( GafferSceneTest.SceneTestCase ) :
 		attributesHash = s.attributesHash()
 		attributes = s.attributes()
 		self.assertEqual( len( attributes ), 1 )
-		self.assertEqual( attributes["ai:surface"][0].name, "standard_surface" )
+		self.assertEqual( attributes["ai:surface"].outputShader().name, "standard_surface" )
 
 		self.assertTrue( s["enabled"].isSame( s.enabledPlug() ) )
 
@@ -325,10 +319,10 @@ class ArnoldShaderTest( GafferSceneTest.SceneTestCase ) :
 
 	def testDisablingInNetwork( self ) :
 
-		s = GafferArnold.ArnoldShader()
+		s = GafferArnold.ArnoldShader( "s" )
 		s.loadShader( "standard_surface" )
 
-		f = GafferArnold.ArnoldShader()
+		f = GafferArnold.ArnoldShader( "f" )
 		f.loadShader( "flat" )
 
 		s["parameters"]["specular_color"].setInput( f["out"] )
@@ -336,8 +330,8 @@ class ArnoldShaderTest( GafferSceneTest.SceneTestCase ) :
 		attributesHash = s.attributesHash()
 		attributes = s.attributes()
 		self.assertEqual( len( attributes ), 1 )
-		self.assertEqual( attributes["ai:surface"][1].name, "standard_surface" )
-		self.assertEqual( attributes["ai:surface"][0].name, "flat" )
+		self.assertEqual( attributes["ai:surface"].getShader( "s" ).name, "standard_surface" )
+		self.assertEqual( attributes["ai:surface"].getShader( "f" ).name, "flat" )
 
 		self.assertTrue( s["enabled"].isSame( s.enabledPlug() ) )
 
@@ -349,11 +343,11 @@ class ArnoldShaderTest( GafferSceneTest.SceneTestCase ) :
 		attributes2 = s.attributes()
 		self.assertEqual( len( attributes2 ), 1 )
 
-		for key in attributes["ai:surface"][1].parameters.keys() :
+		for key in attributes["ai:surface"].getShader( "s" ).parameters.keys() :
 			if key != "specular_color" :
 				self.assertEqual(
-					attributes["ai:surface"][1].parameters[key],
-					attributes2["ai:surface"][0].parameters[key]
+					attributes["ai:surface"].getShader( "s" ).parameters[key],
+					attributes2["ai:surface"].getShader( "s" ).parameters[key]
 				)
 
 	def testAssignmentAttributeName( self ) :
@@ -489,6 +483,41 @@ class ArnoldShaderTest( GafferSceneTest.SceneTestCase ) :
 		n = GafferArnold.ArnoldShader()
 		n.loadShader( "standard_surface" )
 		self.assertTrue( "diffuse_roughness" not in n["parameters"] )
+
+	def testDefaultOverrideMetadata( self ) :
+
+		self.__forceArnoldRestart()
+
+		n = GafferArnold.ArnoldShader()
+		n.loadShader( "image" )
+
+		self.assertEqual( n["parameters"]["single_channel"].defaultValue(), False )
+		self.assertEqual( n["parameters"]["mipmap_bias"].defaultValue(), 0 )
+		self.assertEqual( n["parameters"]["start_channel"].defaultValue(), 0 )
+		self.assertEqual( n["parameters"]["sscale"].defaultValue(), 1.0 )
+		self.assertEqual( n["parameters"]["multiply"].defaultValue(), imath.Color3f( 1.0 ) )
+		self.assertEqual( n["parameters"]["missing_texture_color"].defaultValue(), imath.Color4f( 0.0 ) )
+		self.assertEqual( n["parameters"]["uvcoords"].defaultValue(), imath.V2f( 0.0 ) )
+		self.assertEqual( n["parameters"]["filename"].defaultValue(), "" )
+		self.assertEqual( n["parameters"]["filter"].defaultValue(), "smart_bicubic" )
+
+		self.addCleanup( os.environ.__setitem__, "ARNOLD_PLUGIN_PATH", os.environ["ARNOLD_PLUGIN_PATH"] )
+		os.environ["ARNOLD_PLUGIN_PATH"] = os.environ["ARNOLD_PLUGIN_PATH"] + ":" + os.path.join( os.path.dirname( __file__ ), "metadata" )
+
+		self.__forceArnoldRestart()
+
+		n.loadShader( "image" )
+		self.assertEqual( n["parameters"]["single_channel"].defaultValue(), True )
+		self.assertEqual( n["parameters"]["mipmap_bias"].defaultValue(), 42 )
+		self.assertEqual( n["parameters"]["start_channel"].defaultValue(), 42 )
+		self.assertAlmostEqual( n["parameters"]["sscale"].defaultValue(), 42.42, places = 5 )
+		self.assertEqual( n["parameters"]["multiply"].defaultValue(), imath.Color3f( 1.2, 3.4, 5.6 ) )
+		# RGBA metadata support added in Arnold 5.3.  Need to wait until we standardise on that 
+		# to add this declaration to the test metadata
+		#self.assertEqual( n["parameters"]["missing_texture_color"].defaultValue(), imath.Color4f( 1.2, 3.4, 5.6, 7.8 ) )
+		self.assertEqual( n["parameters"]["uvcoords"].defaultValue(), imath.V2f( 1.2, 3.4 ) )
+		self.assertEqual( n["parameters"]["filename"].defaultValue(), "overrideDefault" )
+		self.assertEqual( n["parameters"]["filter"].defaultValue(), "closest" )
 
 	def testMixAndMatchWithOSLShaders( self ) :
 
@@ -657,10 +686,10 @@ class ArnoldShaderTest( GafferSceneTest.SceneTestCase ) :
 
 	def testDisabledShaderPassesThroughExternalValue( self ) :
 
-		s = GafferArnold.ArnoldShader()
+		s = GafferArnold.ArnoldShader( "s" )
 		s.loadShader( "standard_surface" )
 
-		f = GafferArnold.ArnoldShader()
+		f = GafferArnold.ArnoldShader( "f" )
 		f.loadShader( "flat" )
 
 		f["parameters"]["color"].setValue( imath.Color3f( 1, 2, 3 ) )
@@ -669,8 +698,8 @@ class ArnoldShaderTest( GafferSceneTest.SceneTestCase ) :
 		attributesHash = s.attributesHash()
 		attributes = s.attributes()
 		self.assertEqual( len( attributes ), 1 )
-		self.assertEqual( attributes["ai:surface"][1].name, "standard_surface" )
-		self.assertEqual( attributes["ai:surface"][0].name, "flat" )
+		self.assertEqual( attributes["ai:surface"].getShader( "s" ).name, "standard_surface" )
+		self.assertEqual( attributes["ai:surface"].getShader( "f" ).name, "flat" )
 
 		self.assertTrue( s["enabled"].isSame( s.enabledPlug() ) )
 
@@ -682,16 +711,16 @@ class ArnoldShaderTest( GafferSceneTest.SceneTestCase ) :
 		attributes2 = s.attributes()
 		self.assertEqual( len( attributes2 ), 1 )
 
-		for key in attributes["ai:surface"][1].parameters.keys() :
+		for key in attributes["ai:surface"].getShader( "s" ).parameters.keys() :
 			if key != "specular_color" :
 				self.assertEqual(
-					attributes["ai:surface"][1].parameters[key],
-					attributes2["ai:surface"][0].parameters[key]
+					attributes["ai:surface"].getShader( "s" ).parameters[key],
+					attributes2["ai:surface"].getShader( "s" ).parameters[key]
 				)
 			else :
 				self.assertEqual(
-					attributes["ai:surface"][0].parameters["color"],
-					attributes2["ai:surface"][0].parameters[key]
+					attributes["ai:surface"].getShader( "f" ).parameters["color"],
+					attributes2["ai:surface"].getShader( "s" ).parameters[key]
 				)
 
 	def testShaderSwitch( self ) :
@@ -724,7 +753,10 @@ class ArnoldShaderTest( GafferSceneTest.SceneTestCase ) :
 
 			network = l.attributes()["ai:surface"]
 			self.assertEqual( len( network ), 2 )
-			self.assertEqual( network[0].parameters["color"].value, imath.Color3f( index ) )
+			self.assertEqual(
+				network.getShader( "f{0}".format( index + 1 ) ).parameters["color"].value,
+				imath.Color3f( index )
+			)
 
 		for i in range( 0, 3 ) :
 			s["index"].setValue( i )
@@ -732,10 +764,10 @@ class ArnoldShaderTest( GafferSceneTest.SceneTestCase ) :
 
 	def testMixAndMatchWithOSLShadersThroughSwitch( self ) :
 
-		arnoldIn = GafferArnold.ArnoldShader()
+		arnoldIn = GafferArnold.ArnoldShader( "arnoldIn" )
 		arnoldIn.loadShader( "flat" )
 
-		oslIn = GafferOSL.OSLShader()
+		oslIn = GafferOSL.OSLShader( "oslIn" )
 		oslIn.loadShader( "Pattern/ColorSpline" )
 
 		switch1 = Gaffer.Switch()
@@ -750,10 +782,10 @@ class ArnoldShaderTest( GafferSceneTest.SceneTestCase ) :
 		switch2["in"][0].setInput( arnoldIn["out"] )
 		switch2["in"][1].setInput( oslIn["out"]["c"] )
 
-		arnoldOut = GafferArnold.ArnoldShader()
+		arnoldOut = GafferArnold.ArnoldShader( "arnoldOut" )
 		arnoldOut.loadShader( "flat" )
 
-		oslOut = GafferOSL.OSLShader()
+		oslOut = GafferOSL.OSLShader( "oslOut" )
 		oslOut.loadShader( "Conversion/ColorToFloat" )
 
 		arnoldOut["parameters"]["color"].setInput( switch1["out"] )
@@ -770,18 +802,52 @@ class ArnoldShaderTest( GafferSceneTest.SceneTestCase ) :
 			self.assertEqual( len( network1 ), 2 )
 			self.assertEqual( len( network2 ), 2 )
 
-			self.assertEqual( network1[1].name, "flat" )
-			self.assertEqual( network2[1].name, "Conversion/ColorToFloat" )
+			self.assertEqual( network1.getShader( "arnoldOut" ).name, "flat" )
+			self.assertEqual( network2.getShader( "oslOut" ).name, "Conversion/ColorToFloat" )
 
 			if i == 0 :
 
-				self.assertEqual( network1[1].parameters["color"].value, "link:" + network1[0].parameters["__handle"].value )
-				self.assertEqual( network2[1].parameters["c"].value, "link:" + network1[0].parameters["__handle"].value )
+				self.assertEqual(
+					network1.inputConnections( "arnoldOut" ),
+					[ network1.Connection( ( "arnoldIn", "" ), ( "arnoldOut", "color" ) ) ]
+				)
+				self.assertEqual(
+					network2.inputConnections( "oslOut" ),
+					[ network1.Connection( ( "arnoldIn", "" ), ( "oslOut", "c" ) ) ]
+				)
 
 			else :
 
-				self.assertEqual( network1[1].parameters["color"].value, "link:" + network1[0].parameters["__handle"].value + ".c" )
-				self.assertEqual( network2[1].parameters["c"].value, "link:" + network1[0].parameters["__handle"].value + ".c" )
+				self.assertEqual(
+					network1.inputConnections( "arnoldOut" ),
+					[ network1.Connection( ( "oslIn", "c" ), ( "arnoldOut", "color" ) ) ]
+				)
+				self.assertEqual(
+					network2.inputConnections( "oslOut" ),
+					[ network1.Connection( ( "oslIn", "c" ), ( "oslOut", "c" ) ) ]
+				)
+
+	def testComponentToComponentConnections( self ) :
+
+		n1 = GafferArnold.ArnoldShader( "n1" )
+		n1.loadShader( "flat" )
+
+		n2 = GafferArnold.ArnoldShader( "n2" )
+		n2.loadShader( "flat" )
+
+		n2["parameters"]["color"]["r"].setInput( n1["out"]["g"] )
+		n2["parameters"]["color"]["g"].setInput( n1["out"]["b"] )
+		n2["parameters"]["color"]["b"].setInput( n1["out"]["r"] )
+
+		network = n2.attributes()["ai:surface"]
+		self.assertEqual(
+			network.inputConnections( "n2" ),
+			[
+				( ( "n1", "r" ), ( "n2", "color.b" ) ),
+				( ( "n1", "b" ), ( "n2", "color.g" ) ),
+				( ( "n1", "g" ), ( "n2", "color.r" ) ),
+			]
+		)
 
 	def __forceArnoldRestart( self ) :
 

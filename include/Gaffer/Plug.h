@@ -92,9 +92,8 @@ class GAFFER_API Plug : public GraphComponent
 			/// If the AcceptsInputs flag is not set, then acceptsInput() always returns
 			/// false.
 			AcceptsInputs = 0x00000004,
-			/// If the Cacheable flag is set then values computed during getValue()
-			/// calls will be stored in a cache and reused if equivalent computations
-			/// are requested in the future.
+			/// \deprecated Implement `ComputeNode::hashPolicy()` and `ComputeNode::computePolicy()`
+			/// instead.
 			Cacheable = 0x0000008,
 			/// Generally it is an error to have cyclic dependencies between plugs,
 			/// and creating them will cause an exception to be thrown during dirty
@@ -196,6 +195,7 @@ class GAFFER_API Plug : public GraphComponent
 	protected :
 
 		void parentChanging( Gaffer::GraphComponent *newParent ) override;
+		void parentChanged( Gaffer::GraphComponent *oldParent ) override;
 
 		/// Initiates the propagation of dirtiness from the specified
 		/// plug to its outputs and affected plugs (as defined by
@@ -212,7 +212,6 @@ class GAFFER_API Plug : public GraphComponent
 
 	private :
 
-		void parentChanged();
 		static void propagateDirtinessForParentChange( Plug *plugToDirty );
 
 		void setFlagsInternal( unsigned flags );

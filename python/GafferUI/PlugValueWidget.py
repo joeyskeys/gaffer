@@ -62,15 +62,15 @@ class PlugValueWidget( GafferUI.Widget ) :
 		# upon completing construction.
 		self.__setPlugInternal( plug, callUpdateFromPlug=False )
 
-		self.__popupMenuConnections = []
 		self.__readOnly = False
 
-		self.__dragEnterConnection = self.dragEnterSignal().connect( Gaffer.WeakMethod( self.__dragEnter ) )
-		self.__dragLeaveConnection = self.dragLeaveSignal().connect( Gaffer.WeakMethod( self.__dragLeave ) )
-		self.__dropConnection = self.dropSignal().connect( Gaffer.WeakMethod( self.__drop ) )
+		self.dragEnterSignal().connect( Gaffer.WeakMethod( self.__dragEnter ), scoped = False )
+		self.dragLeaveSignal().connect( Gaffer.WeakMethod( self.__dragLeave ), scoped = False )
+		self.dropSignal().connect( Gaffer.WeakMethod( self.__drop ), scoped = False )
 
-		self.__nodeMetadataChangedConnection = Gaffer.Metadata.nodeValueChangedSignal().connect(
-			Gaffer.WeakMethod( self.__nodeMetadataChanged )
+		Gaffer.Metadata.nodeValueChangedSignal().connect(
+			Gaffer.WeakMethod( self.__nodeMetadataChanged ),
+			scoped = False
 		)
 
 	## Note that it is acceptable to pass None to setPlug() (and to the constructor)
@@ -140,10 +140,10 @@ class PlugValueWidget( GafferUI.Widget ) :
 
 		inputText = ""
 		if input is not None :
-			inputText = " &lt;- " + input.relativeName( input.commonAncestor( plug, Gaffer.GraphComponent ) )
+			inputText = " <- " + input.relativeName( input.commonAncestor( plug, Gaffer.GraphComponent ) )
 
-		result = "<h3>" + plug.relativeName( plug.node() ) + inputText + "</h3>"
-		description = Gaffer.Metadata.plugDescription( plug )
+		result = "# " + plug.relativeName( plug.node() ) + inputText
+		description = Gaffer.Metadata.value( plug, "description" )
 		if description :
 			result += "\n\n" + description
 
@@ -259,14 +259,10 @@ class PlugValueWidget( GafferUI.Widget ) :
 		# it's unclear under what circumstances we get given a right-click vs a context menu event,
 		# but we try to cover all our bases by connecting to both.
 
-		self.__popupMenuConnections.append(
-			widget.buttonPressSignal().connect( functools.partial( Gaffer.WeakMethod( self.__buttonPress ), buttonMask = buttons ) )
-		)
+		widget.buttonPressSignal().connect( functools.partial( Gaffer.WeakMethod( self.__buttonPress ), buttonMask = buttons ), scoped = False )
 
 		if buttons & GafferUI.ButtonEvent.Buttons.Right :
-			self.__popupMenuConnections.append(
-				widget.contextMenuSignal().connect( functools.partial( Gaffer.WeakMethod( self.__contextMenu ) ) )
-			)
+			widget.contextMenuSignal().connect( functools.partial( Gaffer.WeakMethod( self.__contextMenu ) ), scoped = False )
 
 	## Returns a definition for the popup menu - this is called each time the menu is displayed
 	# to allow for dynamic menus. Subclasses may override this method to customise the menu, but
@@ -486,7 +482,7 @@ class PlugValueWidget( GafferUI.Widget ) :
 
 		context = self.__context
 		plug = self.getPlug()
-		if plug is None or plug.getInput() is None :
+		if plug is None or ( plug.getInput() is None and plug.direction() == Gaffer.Plug.Direction.In ):
 			context = None
 
 		if context is not None :
@@ -518,7 +514,7 @@ class PlugValueWidget( GafferUI.Widget ) :
 		title = ".".join( [ IECore.CamelCase.join( IECore.CamelCase.split( x ) ) for x in title.split( "." ) ] )
 
 		self.__popupMenu = GafferUI.Menu( menuDefinition, title = title )
-		self.__popupMenu.popup()
+		self.__popupMenu.popup( parent = self )
 
 		return True
 
@@ -569,8 +565,9 @@ class PlugValueWidget( GafferUI.Widget ) :
 
 		result = IECore.MenuDefinition()
 		for presetName in Gaffer.NodeAlgo.presets( self.getPlug() ) :
+			menuPath = presetName if presetName.startswith( "/" ) else "/" + presetName
 			result.append(
-				presetName, {
+				menuPath, {
 					"command" : functools.partial( Gaffer.WeakMethod( self.__applyPreset ), presetName ),
 					"active" : self._editable(),
 					"checkBox" : presetName == currentPreset,

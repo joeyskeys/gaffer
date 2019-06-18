@@ -100,6 +100,34 @@ class GAFFER_API ValuePlug : public Plug
 		/// Convenience function to append the hash to h.
 		void hash( IECore::MurmurHash &h ) const;
 
+		/// Specifies the methodology used to cache the value
+		/// and hash for output plugs.
+		enum class CachePolicy
+		{
+			/// No caching is performed. Suitable for
+			/// extremely quick processes. Also useful
+			/// to avoid double-counting of cache memory when
+			/// a compute always returns a sub-object of another
+			/// cache entry.
+			Uncached,
+			/// Suitable for regular processes that don't spawn
+			/// TBB tasks. It is essential that any task-spawning
+			/// processes use one of the dedicated policies below.
+			Standard,
+			/// Suitable for processes that spawn TBB tasks.
+			/// Threads waiting for the same result will collaborate
+			/// to perform tasks together until the work is complete.
+			TaskCollaboration,
+			/// Suitable for processes that spawn TBB tasks. Threads
+			/// waiting for an in-progress compute will block until
+			/// it is complete. In theory this is inferior to TaskCollaboration,
+			/// but due to TBB overhead it may be preferable for small
+			/// but frequent computes.
+			TaskIsolation,
+			/// Legacy policy, to be removed.
+			Legacy
+		};
+
 		/// @name Cache management
 		/// ValuePlug optimises repeated computation by storing a cache of
 		/// recently computed values. These functions allow for management
@@ -114,6 +142,18 @@ class GAFFER_API ValuePlug : public Plug
 		static size_t cacheMemoryUsage();
 		/// Clears the cache.
 		static void clearCache();
+		//@}
+
+		/// @name Hash cache management
+		/// In addition to the cache of recently computed values, we also
+		/// keep a per-thread cache of recently computed hashes. These functions
+		/// allow for management of that cache.
+		////////////////////////////////////////////////////////////////////
+		//@{
+		static size_t getHashCacheSizeLimit();
+		/// > Note : Limits are applied on a per-thread basis as and
+		/// > when each thread is used to compute a hash.
+		static void setHashCacheSizeLimit( size_t maxEntriesPerThread );
 		//@}
 
 	protected :
@@ -151,15 +191,13 @@ class GAFFER_API ValuePlug : public Plug
 		/// it again unnecessarily. Passing an incorrect hash has dire consequences, so
 		/// use with care.
 		IECore::ConstObjectPtr getObjectValue( const IECore::MurmurHash *precomputedHash = nullptr ) const;
-		/// As above, but returns null if the value is not already cached.
-		/// This method is likely to be removed in a future version - use only
-		/// if absolutely necessary.
-		IECore::ConstObjectPtr getObjectValueIfCached( const IECore::MurmurHash *precomputedHash = nullptr ) const;
 		/// Should be called by derived classes when they wish to set the plug
 		/// value - the value is referenced directly (not copied) and so must
 		/// not be changed following the call.
 		void setObjectValue( IECore::ConstObjectPtr value );
 
+		/// Reimplemented to emit `plugSetSignal()` for the parent plugs.
+		void parentChanged( Gaffer::GraphComponent *oldParent ) override;
 		/// Reimplemented for cache management.
 		void dirty() override;
 

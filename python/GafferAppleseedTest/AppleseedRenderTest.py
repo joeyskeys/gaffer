@@ -190,8 +190,8 @@ class AppleseedRenderTest( GafferTest.TestCase ) :
 	def testDirectoryCreation( self ) :
 
 		s = Gaffer.ScriptNode()
-		s["variables"].addMember( "renderDirectory", self.temporaryDirectory() + "/renderTests" )
-		s["variables"].addMember( "appleseedDirectory", self.temporaryDirectory() + "/appleseedTests" )
+		s["variables"].addChild( Gaffer.NameValuePlug( "renderDirectory", self.temporaryDirectory() + "/renderTests",  Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ) )
+		s["variables"].addChild( Gaffer.NameValuePlug( "appleseedDirectory", self.temporaryDirectory() + "/appleseedTests", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ) )
 
 		s["plane"] = GafferScene.Plane()
 
@@ -242,6 +242,33 @@ class AppleseedRenderTest( GafferTest.TestCase ) :
 		s = Gaffer.ScriptNode()
 		s["render"] = GafferAppleseed.AppleseedRender()
 		self.assertFalse( "__adaptedIn" in s.serialise() )
+
+	def testNoInput( self ) :
+
+		render = GafferAppleseed.AppleseedRender()
+		render["mode"].setValue( render.Mode.SceneDescriptionMode )
+		render["fileName"].setValue( os.path.join( self.temporaryDirectory(), "test.appleseed" ) )
+
+		self.assertEqual( render["task"].hash(), IECore.MurmurHash() )
+		render["task"].execute()
+		self.assertFalse( os.path.exists( render["fileName"].getValue() ) )
+
+	def testInputFromContextVariables( self ) :
+
+		plane = GafferScene.Plane()
+
+		variables = Gaffer.ContextVariables()
+		variables.setup( GafferScene.ScenePlug() )
+		variables["in"].setInput( plane["out"] )
+
+		render = GafferAppleseed.AppleseedRender()
+		render["in"].setInput( variables["out"] )
+		render["mode"].setValue( render.Mode.SceneDescriptionMode )
+		render["fileName"].setValue( os.path.join( self.temporaryDirectory(), "test.appleseed" ) )
+
+		self.assertNotEqual( render["task"].hash(), IECore.MurmurHash() )
+		render["task"].execute()
+		self.assertTrue( os.path.exists( render["fileName"].getValue() ) )
 
 if __name__ == "__main__":
 	unittest.main()

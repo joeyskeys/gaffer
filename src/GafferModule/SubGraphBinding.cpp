@@ -81,11 +81,61 @@ class BoxSerialiser : public NodeSerialiser
 
 };
 
+} // namespace
+
 // BoxIO
 // =====
 
+namespace GafferModule
+{
+
 class BoxIOSerialiser : public NodeSerialiser
 {
+
+	bool childNeedsConstruction( const Gaffer::GraphComponent *child, const Serialisation &serialisation ) const override
+	{
+		const BoxIO *boxIO = child->parent<BoxIO>();
+		if( child == boxIO->inPlugInternal() || child == boxIO->outPlugInternal() || child == boxIO->passThroughPlugInternal() )
+		{
+			// We'll serialise a `setup()` call to construct these.
+			return false;
+		}
+		return NodeSerialiser::childNeedsConstruction( child, serialisation );
+	}
+
+	std::string postConstructor( const Gaffer::GraphComponent *graphComponent, const std::string &identifier, const Serialisation &serialisation ) const override
+	{
+		std::string result = NodeSerialiser::postConstructor( graphComponent, identifier, serialisation );
+
+		const BoxIO *boxIO = static_cast<const BoxIO *>( graphComponent );
+		if( !boxIO->plug() )
+		{
+			// BoxIO::setup() hasn't been called yet.
+			return result;
+		}
+
+		// Only serialise a call to setup() when we need to construct this node
+		if( !Serialisation::acquireSerialiser( graphComponent->parent() )->childNeedsConstruction(
+			graphComponent, serialisation ) )
+		{
+			return result;
+		}
+
+		if( result.size() )
+		{
+			result += "\n";
+		}
+
+		// Add a call to `setup()` to recreate the plugs.
+
+		PlugPtr plug = boxIO->plug()->createCounterpart( boxIO->plug()->getName(), Plug::In );
+		plug->setFlags( Plug::Dynamic, false );
+
+		const Serialiser *plugSerialiser = Serialisation::acquireSerialiser( plug.get() );
+		result += identifier + ".setup( " + plugSerialiser->constructor( plug.get(), serialisation ) + " )\n";
+
+		return result;
+	}
 
 	std::string postScript( const Gaffer::GraphComponent *graphComponent, const std::string &identifier, const Serialisation &serialisation ) const override
 	{
@@ -106,25 +156,36 @@ class BoxIOSerialiser : public NodeSerialiser
 
 		// The BoxIO node has been set up, but its promoted plug isn't
 		// being serialised (for instance, because someone is copying a
-		// selection from inside a box). Add a setup() call to the
-		// serialisation so that the promoted plug will be created upon
-		// pasting into another box.
+		// selection from inside a box). Add a `setupPromotedPlug()` call
+		// so that the promoted plug will be created if we happen to be
+		// pasted into another box.
 
 		if( !result.empty() )
 		{
 			result += "\n";
 		}
-		result += identifier + ".setup()\n";
+		result += identifier + ".setupPromotedPlug()\n";
 
 		return result;
 	}
 
 };
 
-void setup( BoxIO &b, const Plug *plug )
+} // namespace GafferModule
+
+namespace
+{
+
+void setup( BoxIO &b, const Plug &plug )
 {
 	IECorePython::ScopedGILRelease gilRelease;
-	b.setup( plug );
+	b.setup( &plug );
+}
+
+void setupPromotedPlug( BoxIO &b )
+{
+	IECorePython::ScopedGILRelease gilRelease;
+	b.setupPromotedPlug();
 }
 
 PlugPtr plug( BoxIO &b )
@@ -137,8 +198,13 @@ PlugPtr promotedPlug( BoxIO &b )
 	return b.promotedPlug();
 }
 
+} // namespace
+
 // Reference
 // =========
+
+namespace
+{
 
 struct ReferenceLoadedSlotCaller
 {
@@ -203,6 +269,7 @@ void GafferModule::bindSubGraph()
 
 	NodeClass<BoxIO>( nullptr, no_init )
 		.def( "setup", &setup, ( arg( "plug" ) = object() ) )
+		.def( "setupPromotedPlug", &setupPromotedPlug )
 		.def( "plug", &plug )
 		.def( "promotedPlug", &promotedPlug )
 		.def( "promote", &BoxIO::promote, return_value_policy<CastToIntrusivePtr>() )

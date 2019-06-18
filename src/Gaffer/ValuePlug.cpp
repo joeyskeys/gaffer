@@ -41,11 +41,11 @@
 #include "Gaffer/ComputeNode.h"
 #include "Gaffer/Context.h"
 #include "Gaffer/Private/IECorePreview/LRUCache.h"
+#include "Gaffer/Private/IECorePreview/ParallelAlgo.h"
 #include "Gaffer/Process.h"
 
 #include "boost/bind.hpp"
 #include "boost/format.hpp"
-#include "boost/unordered_map.hpp"
 
 #include "tbb/enumerable_thread_specific.h"
 
@@ -77,12 +77,89 @@ inline const ValuePlug *sourcePlug( const ValuePlug *p )
 	return p;
 }
 
+const IECore::MurmurHash g_nullHash;
+
 } // namespace
 
 //////////////////////////////////////////////////////////////////////////
 // The HashProcess manages the task of calling ComputeNode::hash() and
 // managing a cache of recently computed hashes.
 //////////////////////////////////////////////////////////////////////////
+
+namespace
+{
+
+// Key used to index into a cache of hashes. This is specified by
+// the plug the hash was for and the context it was hashed in.
+struct HashCacheKey
+{
+	HashCacheKey() {};
+	HashCacheKey( const ValuePlug *plug, const Context *context )
+		:	plug( plug ), contextHash( context->hash() )
+	{
+	}
+
+	const bool operator == ( const HashCacheKey &other ) const
+	{
+		return other.plug == plug && other.contextHash == contextHash;
+	}
+
+	const ValuePlug *plug;
+	IECore::MurmurHash contextHash;
+
+};
+
+// `hash_value( HashCacheKey )` is a requirement of the LRUCache,
+// because it uses boost containers internally. This is the reason
+// that HashCacheKey isn't a nested class of HashProcess, as the
+// necessary friendship declaration would require moving things to
+// ValuePlug.h.
+size_t hash_value( const HashCacheKey &key )
+{
+	size_t result = 0;
+	boost::hash_combine( result, key.plug );
+	boost::hash_combine( result, key.contextHash );
+	return result;
+}
+
+// Derives from HashCacheKey, adding on everything we need to
+// construct a HashProcess. We access our caches via this augmented
+// key so that we have all the information we need in our getter
+// functions.
+//
+// Note the requirements the LRUCache places on a GetterKey like this :
+// "it must be implicitly castable to Key, and all GetterKeys
+// which yield the same Key must also yield the same results
+// from the GetterFunction". We meet these requirements as follows :
+//
+// - `computeNode` and `cachePolicy` are properties of the plug which
+//   is included in the HashCacheKey. We store them explicitly only
+//   for convenience and performance.
+// - `context` is represented in HashCacheKey via `contextHash`.
+// - `downstreamPlug` does not influence the results of the computation
+//   in any way. It is merely used for error reporting.
+struct HashProcessKey : public HashCacheKey
+{
+	HashProcessKey( const ValuePlug *plug, const ValuePlug *downstreamPlug, const Context *context, const ComputeNode *computeNode, ValuePlug::CachePolicy cachePolicy )
+		:	HashCacheKey( plug, context ),
+			downstreamPlug( downstreamPlug ),
+			computeNode( computeNode ),
+			cachePolicy( cachePolicy )
+	{
+	}
+
+	const ValuePlug *downstreamPlug;
+	const ComputeNode *computeNode;
+	const ValuePlug::CachePolicy cachePolicy;
+};
+
+// Avoids LRUCache overhead for non-collaborative policies.
+bool spawnsTasks( const HashProcessKey &key )
+{
+	return key.cachePolicy == ValuePlug::CachePolicy::TaskCollaboration;
+}
+
+} // namespace
 
 class ValuePlug::HashProcess : public Process
 {
@@ -105,7 +182,7 @@ class ValuePlug::HashProcess : public Process
 				h.append( plug->typeId() );
 				return h;
 			}
-			else if( p->direction() == In || !p->ancestor<ComputeNode>() )
+			else if( p->direction() == In || !IECore::runTimeCast<const ComputeNode>( p->node() ) )
 			{
 				// No input connection, and no means of computing
 				// a value. There can only ever be a single value,
@@ -115,48 +192,53 @@ class ValuePlug::HashProcess : public Process
 			}
 
 			// A plug with an input connection or an output plug on a ComputeNode. There can be many values -
-			// one per context, computed by ComputeNode::hash(). First we see if we can retrieve the hash
-			// from our cache, and if we can't we'll compute it using a HashProcess instance.
+			// one per context, computed by ComputeNode::hash(). Pull the value from our cache, or compute it
+			// using a HashProcess instance.
 
-			ThreadData &threadData = g_threadData.local();
-			if( !Process::current() )
+			const ComputeNode *computeNode = IECore::runTimeCast<const ComputeNode>( p->node() );
+			const HashProcessKey processKey( p, plug, Context::current(), computeNode, computeNode ? computeNode->hashCachePolicy( p ) : CachePolicy::Uncached );
+
+			if( processKey.cachePolicy == CachePolicy::Uncached )
 			{
-				// Starting a new root computation.
-				if( ++(threadData.cacheClearCount) == 3200 )
+				HashProcess process( processKey );
+				return process.m_result;
+			}
+			else
+			{
+				// Perform any pending adjustments to our thread-local cache.
+
+				ThreadData &threadData = g_threadData.local();
+				if( threadData.clearCache )
 				{
-					// Prevent unbounded growth in the hash cache
-					// if many computations are being performed
-					// without any plugs being dirtied in between,
-					// by clearing it after every Nth computation.
-					// N == 3200 was observed to be 6x faster than
-					// N == 100 for a procedural instancing scene at
-					// a memory cost of about 100 mb.
-					threadData.clearCache = 1;
+					threadData.cache.clear();
+					threadData.clearCache = 0;
 				}
-			}
 
-			if( threadData.clearCache )
-			{
-				threadData.cache.clear();
-				threadData.cacheClearCount = 0;
-				threadData.clearCache = 0;
-			}
+				if( threadData.cache.getMaxCost() != g_cacheSizeLimit )
+				{
+					threadData.cache.setMaxCost( g_cacheSizeLimit );
+				}
 
-			const Context *currentContext = Context::current();
-			const CacheKey key( p, currentContext->hash() );
-			Cache::iterator it = threadData.cache.find( key );
-			if( it != threadData.cache.end() )
-			{
-				return it->second;
-			}
+				// And then look up the result in our cache.
 
-			HashProcess process( p, plug, currentContext );
-			threadData.cache[key] = process.m_result;
-			return process.m_result;
+				return threadData.cache.get( processKey );
+			}
+		}
+
+		static size_t getCacheSizeLimit()
+		{
+			return g_cacheSizeLimit;
+		}
+
+		static void setCacheSizeLimit( size_t maxEntriesPerThread )
+		{
+			g_cacheSizeLimit = maxEntriesPerThread;
+			g_globalCache.setMaxCost( g_cacheSizeLimit );
 		}
 
 		static void clearCache()
 		{
+			g_globalCache.clear();
 			// The docs for enumerable_thread_specific aren't particularly clear
 			// on whether or not it's ok to iterate an e_t_s while concurrently using
 			// local(), which is what we do here. So far in practice it seems to be
@@ -180,22 +262,21 @@ class ValuePlug::HashProcess : public Process
 
 	private :
 
-		HashProcess( const ValuePlug *plug, const ValuePlug *downstream, const Context *currentContext )
-			:	Process( staticType, plug, downstream, currentContext )
+		HashProcess( const HashProcessKey &key )
+			:	Process( staticType, key.plug, key.downstreamPlug )
 		{
 			try
 			{
-				const ComputeNode *n = plug->ancestor<ComputeNode>();
-				if( !n )
+				if( !key.computeNode )
 				{
-					throw IECore::Exception( boost::str( boost::format( "Unable to compute hash for Plug \"%s\" as it has no ComputeNode." ) % plug->fullName() ) );
+					throw IECore::Exception( boost::str( boost::format( "Unable to compute hash for Plug \"%s\" as it has no ComputeNode." ) % plug()->fullName() ) );
 				}
 
-				n->hash( plug, Context::current(), m_result );
+				key.computeNode->hash( key.plug, context(), m_result );
 
-				if( m_result == IECore::MurmurHash() )
+				if( m_result == g_nullHash )
 				{
-					throw IECore::Exception( boost::str( boost::format( "ComputeNode::hash() not implemented for Plug \"%s\"." ) % plug->fullName() ) );
+					throw IECore::Exception( boost::str( boost::format( "ComputeNode::hash() not implemented for Plug \"%s\"." ) % plug()->fullName() ) );
 				}
 			}
 			catch( ... )
@@ -204,35 +285,74 @@ class ValuePlug::HashProcess : public Process
 			}
 		}
 
-		// During a single graph evaluation, we actually call ValuePlug::hash()
-		// many times for the same plugs. First hash() is called for the terminating plug,
-		// which will call hash() for all the upstream plugs, and then compute() is called
-		// for the terminating plug, which will call getValue() on the upstream plugs. But
-		// those upstream plugs will need to call their hash() again in getValue(), so their
-		// value can be cached. This ripples on up the chain, leading to quadratic complexity
-		// in the length of the chain of nodes - not good. Thanks is due to David Minor for
-		// being the first to point this out.
-		//
-		// We address this problem by keeping a per-thread cache of hashes, indexed
-		// by the plug the hash is for and the context the hash was performed in. The
-		// typedefs below describe that data structure. We use Plug::dirty() to empty
-		// the caches, because they are invalidated whenever an upstream value or
-		// connection is changed. We also clear the cache unconditionally every N
-		// computations, to prevent unbounded growth.
-		typedef std::pair<const ValuePlug *, IECore::MurmurHash> CacheKey;
-		typedef boost::unordered_map<CacheKey, IECore::MurmurHash> Cache;
+		static IECore::MurmurHash globalCacheGetter( const HashProcessKey &key, size_t &cost )
+		{
+			cost = 1;
+			IECore::MurmurHash result;
+			switch( key.cachePolicy )
+			{
+				case CachePolicy::TaskCollaboration :
+				{
+					HashProcess process( key );
+					result = process.m_result;
+					break;
+				}
+				case CachePolicy::TaskIsolation :
+				{
+					IECorePreview::ParallelAlgo::isolate(
+						[&result, &key] {
+							HashProcess process( key );
+							result = process.m_result;
+						}
+					);
+					break;
+				}
+				default :
+					// Cache policy not valid for global cache.
+					assert( false );
+					break;
+			}
 
-		// To support multithreading, each thread has it's own state.
+			return result;
+		}
+
+		static IECore::MurmurHash localCacheGetter( const HashProcessKey &key, size_t &cost )
+		{
+			cost = 1;
+			switch( key.cachePolicy )
+			{
+				case CachePolicy::TaskCollaboration :
+				case CachePolicy::TaskIsolation :
+					return g_globalCache.get( key );
+				default :
+				{
+					assert( key.cachePolicy != CachePolicy::Uncached );
+					HashProcess process( key );
+					return process.m_result;
+				}
+			}
+		}
+
+		// Global cache. We use this for heavy hash computations that will spawn subtasks,
+		// so that the work and the result is shared among all threads.
+		typedef IECorePreview::LRUCache<HashCacheKey, IECore::MurmurHash, IECorePreview::LRUCachePolicy::TaskParallel, HashProcessKey> GlobalCache;
+		static GlobalCache g_globalCache;
+
+		// Per-thread cache. This is our default cache, used for hash computations that are
+		// presumed to be lightweight. Using a per-thread cache limits the contention among
+		// threads.
+		typedef IECorePreview::LRUCache<HashCacheKey, IECore::MurmurHash, IECorePreview::LRUCachePolicy::Serial, HashProcessKey> Cache;
+
 		struct ThreadData
 		{
-			ThreadData() : cacheClearCount( 0 ) {}
-			int cacheClearCount;
+			ThreadData() : cache( localCacheGetter, g_cacheSizeLimit ), clearCache( 0 ) {}
 			Cache cache;
 			// Flag to request that hashCache be cleared.
 			tbb::atomic<int> clearCache;
 		};
 
 		static tbb::enumerable_thread_specific<ThreadData, tbb::cache_aligned_allocator<ThreadData>, tbb::ets_key_per_instance > g_threadData;
+		static tbb::atomic<size_t> g_cacheSizeLimit;
 
 		IECore::MurmurHash m_result;
 
@@ -240,11 +360,59 @@ class ValuePlug::HashProcess : public Process
 
 const IECore::InternedString ValuePlug::HashProcess::staticType( "computeNode:hash" );
 tbb::enumerable_thread_specific<ValuePlug::HashProcess::ThreadData, tbb::cache_aligned_allocator<ValuePlug::HashProcess::ThreadData>, tbb::ets_key_per_instance > ValuePlug::HashProcess::g_threadData;
+// Default limit corresponds to a cost of roughly 25Mb per thread.
+tbb::atomic<size_t> ValuePlug::HashProcess::g_cacheSizeLimit = 128000;
+ValuePlug::HashProcess::GlobalCache ValuePlug::HashProcess::g_globalCache( globalCacheGetter, g_cacheSizeLimit );
 
 //////////////////////////////////////////////////////////////////////////
 // The ComputeProcess manages the task of calling ComputeNode::compute()
 // and storing a cache of recently computed results.
 //////////////////////////////////////////////////////////////////////////
+
+namespace
+{
+
+// Contains everything needed to create a ComputeProcess. We access our
+// cache via this key so that we have all the information we need in our getter
+// function.
+struct ComputeProcessKey
+{
+	ComputeProcessKey( const ValuePlug *plug, const ValuePlug *downstreamPlug, const ComputeNode *computeNode, ValuePlug::CachePolicy cachePolicy, const IECore::MurmurHash *precomputedHash )
+		:	plug( plug ),
+			downstreamPlug( downstreamPlug ),
+			computeNode( computeNode ),
+			cachePolicy( cachePolicy ),
+			m_hash( precomputedHash ? *precomputedHash : IECore::MurmurHash() )
+	{
+	}
+
+	const ValuePlug *plug;
+	const ValuePlug *downstreamPlug;
+	const ComputeNode *computeNode;
+	const ValuePlug::CachePolicy cachePolicy;
+
+	operator const IECore::MurmurHash &() const
+	{
+		if( m_hash == g_nullHash )
+		{
+			m_hash = plug->hash();
+		}
+		return m_hash;
+	}
+
+	private :
+
+		mutable IECore::MurmurHash m_hash;
+
+};
+
+// Avoids LRUCache overhead for non-collaborative policies.
+bool spawnsTasks( const ComputeProcessKey &key )
+{
+	return key.cachePolicy == ValuePlug::CachePolicy::TaskCollaboration;
+}
+
+} // namespace
 
 class ValuePlug::ComputeProcess : public Process
 {
@@ -271,13 +439,13 @@ class ValuePlug::ComputeProcess : public Process
 			g_cache.clear();
 		}
 
-		static IECore::ConstObjectPtr value( const ValuePlug *plug, const IECore::MurmurHash *precomputedHash, bool cachedOnly )
+		static IECore::ConstObjectPtr value( const ValuePlug *plug, const IECore::MurmurHash *precomputedHash )
 		{
 			const ValuePlug *p = sourcePlug( plug );
 
 			if( !p->getInput() )
 			{
-				if( p->direction()==In || !p->ancestor<ComputeNode>() )
+				if( p->direction()==In || !IECore::runTimeCast<const ComputeNode>( p->node() ) )
 				{
 					// No input connection, and no means of computing
 					// a value. There can only ever be a single value,
@@ -287,49 +455,48 @@ class ValuePlug::ComputeProcess : public Process
 			}
 
 			// A plug with an input connection or an output plug on a ComputeNode. There can be many values -
-			// one per context, computed via ComputeNode::compute().
+			// one per context, computed via ComputeNode::compute(). Pull the value out of our cache, or compute
+			// it with a ComputeProcess.
 
-			if( p->getFlags( Plug::Cacheable ) )
+			const ComputeNode *computeNode = IECore::runTimeCast<const ComputeNode>( p->node() );
+			const ComputeProcessKey processKey( p, plug, computeNode, computeNode ? computeNode->computeCachePolicy( p ) : CachePolicy::Uncached, precomputedHash );
+
+			if( processKey.cachePolicy == CachePolicy::Uncached )
 			{
-				// First see if we've done this computation already, and reuse the
-				// result if we have.
-				IECore::MurmurHash hash = precomputedHash ? *precomputedHash : p->hash();
-				IECore::ConstObjectPtr result = g_cache.get( hash );
-				if( result || cachedOnly )
-				{
-					return result;
-				}
-
-				// Otherwise, use a ComputeProcess instance to do the work.
-				ComputeProcess process( p, plug );
-				// Store the value in the cache, after first checking that this hasn't
-				// been done already. The check is useful because it's common for an
-				// upstream compute triggered by to have already
-				// done the work, and calling memoryUsage() can be very expensive for some
-				// datatypes. A prime example of this is the attribute state passed around
-				// in GafferScene - it's common for a selective filter to mean that the
-				// attribute compute is implemented as a pass-through (thus an upstream node
-				// will already have computed the same result) and the attribute data itself
-				// consists of many small objects for which computing memory usage is slow.
-				/// \todo Accessing the LRUCache multiple times like this does have an
-				/// overhead, and at some point we'll need to address that.
-				if( !g_cache.get( hash ) )
-				{
-					g_cache.set( hash, process.m_result, process.m_result->memoryUsage() );
-				}
-				return process.m_result;
+				return ComputeProcess( processKey ).m_result;
 			}
 			else
 			{
-				// Plug has requested no caching, so we compute from scratch every
-				// time.
-				if( !cachedOnly )
+				IECore::ConstObjectPtr result = g_cache.get( processKey );
+				if( result )
 				{
-					return ComputeProcess( p, plug ).m_result;
+					return result;
 				}
 				else
 				{
-					return nullptr;
+					// Legacy code path, necessary until all task-spawning computes have
+					// declared an appropriate cache policy. We can't perform the compute
+					// inside `cacheGetter()` because that is called from inside a lock. If
+					// tasks were spawned without being isolated, TBB could steal an outer
+					// task which tries to get the same item from the cache, leading to deadlock.
+					assert( processKey.cachePolicy == CachePolicy::Legacy );
+					ComputeProcess process( processKey );
+					// Store the value in the cache, after first checking that this hasn't
+					// been done already. The check is useful because it's common for an
+					// upstream compute triggered by us to have already
+					// done the work, and calling memoryUsage() can be very expensive for some
+					// datatypes. A prime example of this is the attribute state passed around
+					// in GafferScene - it's common for a selective filter to mean that the
+					// attribute compute is implemented as a pass-through (thus an upstream node
+					// will already have computed the same result) and the attribute data itself
+					// consists of many small objects for which computing memory usage is slow.
+					/// \todo Accessing the LRUCache multiple times like this does have an
+					/// overhead, and at some point we'll need to address that.
+					if( !g_cache.get( processKey ) )
+					{
+						g_cache.set( processKey, process.m_result, process.m_result->memoryUsage() );
+					}
+					return process.m_result;
 				}
 			}
 		}
@@ -355,26 +522,25 @@ class ValuePlug::ComputeProcess : public Process
 
 	private :
 
-		ComputeProcess( const ValuePlug *plug, const ValuePlug *downstream )
-			:	Process( staticType, plug, downstream )
+		ComputeProcess( const ComputeProcessKey &key )
+			:	Process( staticType, key.plug, key.downstreamPlug )
 		{
 			try
 			{
-				if( const ValuePlug *input = plug->getInput<ValuePlug>() )
+				if( const ValuePlug *input = key.plug->getInput<ValuePlug>() )
 				{
 					// Cast is ok, because we know that the resulting setValue() call won't
 					// actually modify the plug, but will just place the value in our m_result.
-					const_cast<ValuePlug *>( plug )->setFrom( input );
+					const_cast<ValuePlug *>( key.plug )->setFrom( input );
 				}
 				else
 				{
-					const ComputeNode *n = plug->ancestor<ComputeNode>();
-					if( !n )
+					if( !key.computeNode )
 					{
-						throw IECore::Exception( boost::str( boost::format( "Unable to compute value for Plug \"%s\" as it has no ComputeNode." ) % plug->fullName() ) );
+						throw IECore::Exception( boost::str( boost::format( "Unable to compute value for Plug \"%s\" as it has no ComputeNode." ) % key.plug->fullName() ) );
 					}
 					// Cast is ok - see comment above.
-					n->compute( const_cast<ValuePlug *>( plug ), context() );
+					key.computeNode->compute( const_cast<ValuePlug *>( key.plug ), context() );
 				}
 				// The calls above should cause setValue() to be called on the result plug, which in
 				// turn will call ValuePlug::setObjectValue(), which will then store the result in
@@ -382,7 +548,7 @@ class ValuePlug::ComputeProcess : public Process
 				// something has gone wrong and we should complain about it.
 				if( !m_result )
 				{
-					throw IECore::Exception( boost::str( boost::format( "Value for Plug \"%s\" not set as expected." ) % plug->fullName() ) );
+					throw IECore::Exception( boost::str( boost::format( "Value for Plug \"%s\" not set as expected." ) % key.plug->fullName() ) );
 				}
 			}
 			catch( ... )
@@ -391,15 +557,44 @@ class ValuePlug::ComputeProcess : public Process
 			}
 		}
 
-		static IECore::ObjectPtr nullGetter( const IECore::MurmurHash &h, size_t &cost )
+		static IECore::ConstObjectPtr cacheGetter( const ComputeProcessKey &key, size_t &cost )
 		{
-			cost = 0;
-			return nullptr;
+			IECore::ConstObjectPtr result;
+			switch( key.cachePolicy )
+			{
+				case CachePolicy::Standard :
+				case CachePolicy::TaskCollaboration :
+				{
+					ComputeProcess process( key );
+					result = process.m_result;
+					break;
+				}
+				case CachePolicy::TaskIsolation :
+				{
+					IECorePreview::ParallelAlgo::isolate(
+						[&result, &key] {
+							ComputeProcess process( key );
+							result = process.m_result;
+						}
+					);
+					break;
+				}
+				case CachePolicy::Uncached :
+					// Should not have got here.
+					assert( false );
+					break;
+				default :
+					// Can't do the work inside the cache, because we don't know if
+					// the compute will lead to deadlock. We'll do the work outside.
+					break;
+			}
+			cost = result ? result->memoryUsage() : 0;
+			return result;
 		}
 
 		// A cache mapping from ValuePlug::hash() to the result of the previous computation
 		// for that hash. This allows us to cache results for faster repeat evaluation
-		typedef IECorePreview::LRUCache<IECore::MurmurHash, IECore::ConstObjectPtr> Cache;
+		typedef IECorePreview::LRUCache<IECore::MurmurHash, IECore::ConstObjectPtr, IECorePreview::LRUCachePolicy::TaskParallel, ComputeProcessKey> Cache;
 		static Cache g_cache;
 
 		IECore::ConstObjectPtr m_result;
@@ -407,7 +602,7 @@ class ValuePlug::ComputeProcess : public Process
 };
 
 const IECore::InternedString ValuePlug::ComputeProcess::staticType( "computeNode:compute" );
-ValuePlug::ComputeProcess::Cache ValuePlug::ComputeProcess::g_cache( nullGetter, 1024 * 1024 * 1024 * 1 ); // 1 gig
+ValuePlug::ComputeProcess::Cache ValuePlug::ComputeProcess::g_cache( cacheGetter, 1024 * 1024 * 1024 * 1 ); // 1 gig
 
 //////////////////////////////////////////////////////////////////////////
 // SetValueAction implementation
@@ -491,11 +686,6 @@ ValuePlug::ValuePlug( const std::string &name, Direction direction,
 ValuePlug::ValuePlug( const std::string &name, Direction direction, unsigned flags )
 	:	Plug( name, direction, flags ), m_defaultValue( nullptr ), m_staticValue( nullptr )
 {
-	// We expect to have children added/removed, so arrange to deal with that
-	// appropriately. The other constructor above is for leaf plugs (this is
-	// enforced in acceptsChild()) so we don't need to connect there.
-	childAddedSignal().connect( boost::bind( &ValuePlug::childAddedOrRemoved, this ) );
-	childRemovedSignal().connect( boost::bind( &ValuePlug::childAddedOrRemoved, this ) );
 }
 
 ValuePlug::~ValuePlug()
@@ -601,9 +791,16 @@ void ValuePlug::setFrom( const ValuePlug *other )
 	ChildContainer::const_iterator it, otherIt;
 	for( it = children().begin(), otherIt = typedOther->children().begin(); it!=children().end() && otherIt!=typedOther->children().end(); it++, otherIt++ )
 	{
-		ValuePlug *child = static_cast<ValuePlug *>( it->get() );
-		const ValuePlug *otherChild = static_cast<ValuePlug *>( otherIt->get() );
-		child->setFrom( otherChild );
+		// We use `runTimeCast()` here as a concession to NameValuePlug,
+		// which egregiously ignores the wishes of our `acceptsChild()`
+		// implementation. See `NameValuePlug::acceptsChild()` for more
+		// details.
+		ValuePlug *child = IECore::runTimeCast<ValuePlug>( it->get() );
+		const ValuePlug *otherChild = IECore::runTimeCast<ValuePlug>( otherIt->get() );
+		if( child && otherChild )
+		{
+			child->setFrom( otherChild );
+		}
 	}
 }
 
@@ -671,12 +868,7 @@ const IECore::Object *ValuePlug::defaultObjectValue() const
 
 IECore::ConstObjectPtr ValuePlug::getObjectValue( const IECore::MurmurHash *precomputedHash ) const
 {
-	return ComputeProcess::value( this, precomputedHash, /* cachedOnly = */ false );
-}
-
-IECore::ConstObjectPtr ValuePlug::getObjectValueIfCached( const IECore::MurmurHash *precomputedHash ) const
-{
-	return ComputeProcess::value( this, precomputedHash, /* cachedOnly = */ true );
+	return ComputeProcess::value( this, precomputedHash );
 }
 
 void ValuePlug::setObjectValue( IECore::ConstObjectPtr value )
@@ -720,15 +912,6 @@ void ValuePlug::setValueInternal( IECore::ConstObjectPtr value, bool propagateDi
 	}
 }
 
-void ValuePlug::childAddedOrRemoved()
-{
-	// Addition or removal of a child is considered to change its value,
-	// so we emit the appropriate signal. This is mostly of use for the
-	// SplinePlug and CompoundDataPlug, where points and data members
-	// are added and removed by adding and removing plugs.
-	emitPlugSet();
-}
-
 void ValuePlug::emitPlugSet()
 {
 	if( Node *n = node() )
@@ -750,6 +933,24 @@ void ValuePlug::emitPlugSet()
 		{
 			output->emitPlugSet();
 		}
+	}
+}
+
+void ValuePlug::parentChanged( Gaffer::GraphComponent *oldParent )
+{
+	Plug::parentChanged( oldParent );
+
+	// Addition or removal of a child is considered to change a plug's value,
+	// so we emit the appropriate signal. This is mostly of use for the
+	// SplinePlug and CompoundDataPlug, where points and data members
+	// are added and removed by adding and removing plugs.
+	if( auto p = IECore::runTimeCast<ValuePlug>( oldParent ) )
+	{
+		p->emitPlugSet();
+	}
+	if( auto p = parent<ValuePlug>() )
+	{
+		p->emitPlugSet();
 	}
 }
 
@@ -779,4 +980,14 @@ size_t ValuePlug::cacheMemoryUsage()
 void ValuePlug::clearCache()
 {
 	ComputeProcess::clearCache();
+}
+
+size_t ValuePlug::getHashCacheSizeLimit()
+{
+	return HashProcess::getCacheSizeLimit();
+}
+
+void ValuePlug::setHashCacheSizeLimit( size_t maxEntriesPerThread )
+{
+	HashProcess::setCacheSizeLimit( maxEntriesPerThread );
 }

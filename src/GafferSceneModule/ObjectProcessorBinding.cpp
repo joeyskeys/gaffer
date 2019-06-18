@@ -50,6 +50,8 @@
 #include "GafferScene/Parameters.h"
 #include "GafferScene/PointsType.h"
 #include "GafferScene/ReverseWinding.h"
+#include "GafferScene/UDIMQuery.h"
+#include "GafferScene/Wireframe.h"
 
 #include "GafferBindings/DependencyNodeBinding.h"
 
@@ -64,7 +66,6 @@ void GafferSceneModule::bindObjectProcessor()
 	GafferBindings::DependencyNodeClass<GafferScene::DeletePoints>();
 	GafferBindings::DependencyNodeClass<GafferScene::DeleteFaces>();
 	GafferBindings::DependencyNodeClass<GafferScene::DeleteCurves>();
-	GafferBindings::DependencyNodeClass<GafferScene::MeshTangents>();
 	GafferBindings::DependencyNodeClass<GafferScene::PointsType>();
 	GafferBindings::DependencyNodeClass<GafferScene::MeshToPoints>();
 	GafferBindings::DependencyNodeClass<MeshType>();
@@ -73,5 +74,16 @@ void GafferSceneModule::bindObjectProcessor()
 	GafferBindings::DependencyNodeClass<ReverseWinding>();
 	GafferBindings::DependencyNodeClass<GafferScene::MeshDistortion>();
 	GafferBindings::DependencyNodeClass<DeleteObject>();
+	GafferBindings::DependencyNodeClass<UDIMQuery>();
+	GafferBindings::DependencyNodeClass<Wireframe>();
+
+	scope s = GafferBindings::DependencyNodeClass<GafferScene::MeshTangents>();
+
+	enum_<GafferScene::MeshTangents::Mode>( "Mode" )
+		.value( "UV", GafferScene::MeshTangents::Mode::UV )
+		.value( "FirstEdge", GafferScene::MeshTangents::Mode::FirstEdge )
+		.value( "TwoEdges", GafferScene::MeshTangents::Mode::TwoEdges )
+		.value( "PrimitiveCentroid", GafferScene::MeshTangents::Mode::PrimitiveCentroid )
+		;
 
 }

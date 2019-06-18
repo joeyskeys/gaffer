@@ -99,7 +99,7 @@ V2f planarScaleFromCameraAndRes( const IECoreScene::Camera *cam, const V2i &res 
 	{
 		return V2f( 1.0f );
 	}
-	
+
 	return V2f( cam->getAperture()[0] / ((float)res[0] ), cam->getAperture()[1] / ((float)res[1] ) );
 }
 
@@ -350,12 +350,12 @@ class ViewportGadget::CameraController : public boost::noncopyable
 				);
 				if( m_sourceCamera->getProjection() == "perspective" )
 				{
-					cameraPosition = cameraPosition / cameraPosition.z;
+					cameraPosition = cameraPosition / -cameraPosition.z;
 				}
 
 				V2f ndcPosition(
-					lerpfactor( cameraPosition.x, normalizedScreenWindow.max.x, normalizedScreenWindow.min.x ),
-					lerpfactor( cameraPosition.y, normalizedScreenWindow.min.y, normalizedScreenWindow.max.y )
+					lerpfactor( cameraPosition.x, normalizedScreenWindow.min.x, normalizedScreenWindow.max.x ),
+					lerpfactor( cameraPosition.y, normalizedScreenWindow.max.y, normalizedScreenWindow.min.y )
 				);
 				return V2f(
 					ndcPosition.x * resolution.x,
@@ -443,6 +443,39 @@ class ViewportGadget::CameraController : public boost::noncopyable
 			Pointer::setCurrent( "" );
 		}
 
+		/// Determine the type of motion based on current events
+		/// \todo: The original separation of responsibilities was that
+		/// CameraController knew how to perform camera movement, and
+		/// ViewportGadgets knew how to handle events, and decided how to map
+		/// those to camera movement requests. This breaks that original
+		/// separation. Full separation would mean that the CameraController
+		/// made its own connections to buttonPressSignal/dragBeginSignal etc,
+		/// "stealing" any events it wanted before they were processed by the
+		/// ViewportGadget. There are a few complications regarding drag
+		/// tracking and unmodified MMB drags, though.
+		MotionType cameraMotionType( const ButtonEvent &event, bool variableAspectZoom )
+		{
+			if(
+				( event.modifiers == ModifiableEvent::Alt ) ||
+				( event.buttons == ButtonEvent::Middle && event.modifiers == ModifiableEvent::None ) ||
+				( variableAspectZoom && event.modifiers & ModifiableEvent::Shift && event.modifiers & ModifiableEvent::Alt && event.buttons == ButtonEvent::Right )
+			)
+			{
+				switch( event.buttons )
+				{
+					case ButtonEvent::Left :
+						return ViewportGadget::CameraController::Tumble;
+					case ButtonEvent::Middle :
+						return CameraController::Track;
+					case ButtonEvent::Right :
+						return CameraController::Dolly;
+					default :
+						return CameraController::None;
+				}
+			}
+
+			return CameraController::None;
+		}
 
 	private:
 
@@ -528,6 +561,14 @@ class ViewportGadget::CameraController : public boost::noncopyable
 					}
 				}
 				m_planarScale = m_motionPlanarScale * mult;
+
+				// Also apply a transform to keep the origin of the scale centered on the
+				// starting cursor position
+				V2f offset = V2f( -1, 1 ) * ( m_planarScale - m_motionPlanarScale ) *
+					( m_motionStart - V2f( 0.5 ) * resolution );
+				M44f t = m_motionMatrix;
+				t.translate( V3f( offset.x, offset.y, 0 ) );
+				m_transform = t;
 			}
 			else
 			{
@@ -592,6 +633,8 @@ ViewportGadget::ViewportGadget( GadgetPtr primaryChild )
 	buttonPressSignal().connect( boost::bind( &ViewportGadget::buttonPress, this, ::_1,  ::_2 ) );
 	buttonReleaseSignal().connect( boost::bind( &ViewportGadget::buttonRelease, this, ::_1,  ::_2 ) );
 	buttonDoubleClickSignal().connect( boost::bind( &ViewportGadget::buttonDoubleClick, this, ::_1,  ::_2 ) );
+	enterSignal().connect( boost::bind( &ViewportGadget::enter, this, ::_2 ) );
+	leaveSignal().connect( boost::bind( &ViewportGadget::leave, this, ::_2 ) );
 	mouseMoveSignal().connect( boost::bind( &ViewportGadget::mouseMove, this, ::_1,  ::_2 ) );
 	dragBeginSignal().connect( boost::bind( &ViewportGadget::dragBegin, this, ::_1, ::_2 ) );
 	dragEnterSignal().connect( boost::bind( &ViewportGadget::dragEnter, this, ::_1, ::_2 ) );
@@ -956,7 +999,10 @@ void ViewportGadget::childRemoved( GraphComponent *parent, GraphComponent *child
 
 bool ViewportGadget::buttonPress( GadgetPtr gadget, const ButtonEvent &event )
 {
-	if( event.modifiers == ModifiableEvent::Alt || ( getVariableAspectZoom() && event.modifiers & ModifiableEvent::Shift && event.modifiers & ModifiableEvent::Alt && event.buttons == ButtonEvent::Right ) )
+	// A child's interaction with an unmodifier MMB drag takes precedence over camera moves
+	bool unmodifiedMiddleDrag = event.buttons == ButtonEvent::Middle && event.modifiers == ModifiableEvent::None;
+
+	if( !unmodifiedMiddleDrag && m_cameraController->cameraMotionType( event, m_variableAspectZoom ) )
 	{
 		// accept press so we get a dragBegin opportunity for camera movement
 		return true;
@@ -974,7 +1020,7 @@ bool ViewportGadget::buttonPress( GadgetPtr gadget, const ButtonEvent &event )
 		return true;
 	}
 
-	if ( event.buttons == ButtonEvent::Middle && event.modifiers == ModifiableEvent::None )
+	if( unmodifiedMiddleDrag )
 	{
 		// accept press so we get a dragBegin opportunity for camera movement
 		return true;
@@ -1002,57 +1048,8 @@ bool ViewportGadget::buttonDoubleClick( GadgetPtr gadget, const ButtonEvent &eve
 	return false;
 }
 
-void ViewportGadget::emitEnterLeaveEvents( GadgetPtr newGadgetUnderMouse, GadgetPtr oldGadgetUnderMouse, const ButtonEvent &event )
+void ViewportGadget::updateGadgetUnderMouse( const ButtonEvent &event )
 {
-	// figure out the lowest point in the hierarchy where the entered status is unchanged.
-	GadgetPtr lowestUnchanged = this;
-	if( oldGadgetUnderMouse && newGadgetUnderMouse )
-	{
-		if( oldGadgetUnderMouse->isAncestorOf( newGadgetUnderMouse.get() ) )
-		{
-			lowestUnchanged = oldGadgetUnderMouse;
-		}
-		else if( newGadgetUnderMouse->isAncestorOf( oldGadgetUnderMouse.get() ) )
-		{
-			lowestUnchanged = newGadgetUnderMouse;
-		}
-		else
-		{
-			lowestUnchanged = oldGadgetUnderMouse->commonAncestor<Gadget>( newGadgetUnderMouse.get() );
-		}
-	}
-
-	// emit leave events, innermost first
-	if( oldGadgetUnderMouse )
-	{
-		GadgetPtr leaveTarget = oldGadgetUnderMouse;
-		while( leaveTarget != lowestUnchanged )
-		{
-			dispatchEvent( leaveTarget.get(), &Gadget::leaveSignal, event );
-			leaveTarget = leaveTarget->parent<Gadget>();
-		}
-	}
-
-	// emit enter events, outermost first
-	if( newGadgetUnderMouse )
-	{
-		std::vector<GadgetPtr> enterTargets;
-		GadgetPtr enterTarget = newGadgetUnderMouse;
-		while( enterTarget != lowestUnchanged )
-		{
-			enterTargets.push_back( enterTarget );
-			enterTarget = enterTarget->parent<Gadget>();
-		}
-		for( std::vector<GadgetPtr>::const_reverse_iterator it = enterTargets.rbegin(); it!=enterTargets.rend(); it++ )
-		{
-			dispatchEvent( *it, &Gadget::enterSignal, event );
-		}
-	}
-};
-
-bool ViewportGadget::mouseMove( GadgetPtr gadget, const ButtonEvent &event )
-{
-	// find the gadget under the mouse
 	std::vector<GadgetPtr> gadgets;
 	gadgetsAt( V2f( event.line.p0.x, event.line.p0.y ), gadgets );
 
@@ -1067,6 +1064,79 @@ bool ViewportGadget::mouseMove( GadgetPtr gadget, const ButtonEvent &event )
 		emitEnterLeaveEvents( newGadgetUnderMouse, m_gadgetUnderMouse, event );
 		m_gadgetUnderMouse = newGadgetUnderMouse;
 	}
+}
+
+void ViewportGadget::emitEnterLeaveEvents( GadgetPtr newGadgetUnderMouse, GadgetPtr oldGadgetUnderMouse, const ButtonEvent &event )
+{
+
+	// figure out the lowest point in the hierarchy where the entered status is unchanged.
+	GadgetPtr lowestUnchanged = this;
+	if( oldGadgetUnderMouse && newGadgetUnderMouse )
+	{
+		if( oldGadgetUnderMouse->isAncestorOf( newGadgetUnderMouse.get() ) )
+		{
+			lowestUnchanged = oldGadgetUnderMouse;
+		}
+		else if( newGadgetUnderMouse->isAncestorOf( oldGadgetUnderMouse.get() ) )
+		{
+			lowestUnchanged = newGadgetUnderMouse;
+		}
+		else
+		{
+			if( Gadget *commonAncestor = oldGadgetUnderMouse->commonAncestor<Gadget>( newGadgetUnderMouse.get() ) )
+			{
+				lowestUnchanged = commonAncestor;
+			}
+		}
+	}
+
+	// emit leave events, innermost first
+	if( oldGadgetUnderMouse )
+	{
+		GadgetPtr leaveTarget = oldGadgetUnderMouse;
+		while( leaveTarget && leaveTarget != lowestUnchanged )
+		{
+			dispatchEvent( leaveTarget.get(), &Gadget::leaveSignal, event );
+			leaveTarget = leaveTarget->parent<Gadget>();
+		}
+	}
+
+	// emit enter events, outermost first
+	if( newGadgetUnderMouse )
+	{
+		std::vector<GadgetPtr> enterTargets;
+		GadgetPtr enterTarget = newGadgetUnderMouse;
+		while( enterTarget && enterTarget != lowestUnchanged )
+		{
+			enterTargets.push_back( enterTarget );
+			enterTarget = enterTarget->parent<Gadget>();
+		}
+		for( std::vector<GadgetPtr>::const_reverse_iterator it = enterTargets.rbegin(); it!=enterTargets.rend(); it++ )
+		{
+			dispatchEvent( *it, &Gadget::enterSignal, event );
+		}
+	}
+
+};
+
+void ViewportGadget::enter( const ButtonEvent &event )
+{
+	updateGadgetUnderMouse( event );
+}
+
+void ViewportGadget::leave( const ButtonEvent &event )
+{
+	if( m_gadgetUnderMouse )
+	{
+		emitEnterLeaveEvents( nullptr, m_gadgetUnderMouse, event );
+		m_gadgetUnderMouse = nullptr;
+	}
+}
+
+bool ViewportGadget::mouseMove( GadgetPtr gadget, const ButtonEvent &event )
+{
+	// find the gadget under the mouse
+	updateGadgetUnderMouse( event );
 
 	// pass the signal through
 	if( m_gadgetUnderMouse )
@@ -1083,9 +1153,12 @@ IECore::RunTimeTypedPtr ViewportGadget::dragBegin( GadgetPtr gadget, const DragD
 {
 	m_dragTrackingThreshold = limits<float>::max();
 
-	if ( !(event.modifiers & ModifiableEvent::Alt) && m_lastButtonPressGadget )
+	CameraController::MotionType cameraMotionType = m_cameraController->cameraMotionType( event, m_variableAspectZoom );
+	bool unmodifiedMiddleDrag = event.buttons == ButtonEvent::Middle && event.modifiers == ModifiableEvent::None;
+
+	if( ( !cameraMotionType || unmodifiedMiddleDrag ) && m_lastButtonPressGadget )
 	{
-		// see if a child gadget would like to start a drag
+		// see if a child gadget would like to start a drag because the camera doesn't handle the event
 		RunTimeTypedPtr data = dispatchEvent( m_lastButtonPressGadget, &Gadget::dragBeginSignal, event );
 		if( data )
 		{
@@ -1095,55 +1168,33 @@ IECore::RunTimeTypedPtr ViewportGadget::dragBegin( GadgetPtr gadget, const DragD
 		}
 	}
 
-	if ( event.modifiers == ModifiableEvent::Alt || ( event.buttons == ButtonEvent::Middle && event.modifiers == ModifiableEvent::None ) || ( getVariableAspectZoom() && event.modifiers & ModifiableEvent::Shift && event.modifiers & ModifiableEvent::Alt && event.buttons == ButtonEvent::Right ) )
+	if( cameraMotionType )
 	{
-		// start camera motion
+		m_cameraInMotion = true;
 
-		CameraController::MotionType motionType = CameraController::None;
-		switch( event.buttons )
+		// the const_cast is necessary because we don't want to give all the other
+		// Gadget types non-const access to the event, but we do need the ViewportGadget
+		// to assign destination and source gadgets. the alternative would be a different
+		// set of non-const signals on the ViewportGadget, or maybe even having ViewportGadget
+		// not derived from Gadget at all. this seems the lesser of two evils.
+		const_cast<DragDropEvent &>( event ).sourceGadget = this;
+
+		// we only actually update the camera if it's editable, but we still go through
+		// the usual dragEnter/dragMove/dragEnd process so that we can swallow the events.
+		// it would be confusing for users if they tried to edit a non-editable camera and
+		// their gestures fell through and affected the viewport contents.
+		if( getCameraEditable() )
 		{
-			case ButtonEvent::Left :
-				motionType = CameraController::Tumble;
-				break;
-			case ButtonEvent::Middle :
-				motionType = CameraController::Track;
-				break;
-			case ButtonEvent::Right :
-				motionType = CameraController::Dolly;
-				break;
-			default :
-				motionType = CameraController::None;
-				break;
+			m_cameraController->motionStart( cameraMotionType, V2i( (int)event.line.p1.x, (int)event.line.p1.y ) );
 		}
 
-		if( motionType )
-		{
-			m_cameraInMotion = true;
-
-			// the const_cast is necessary because we don't want to give all the other
-			// Gadget types non-const access to the event, but we do need the ViewportGadget
-			// to assign destination and source gadgets. the alternative would be a different
-			// set of non-const signals on the ViewportGadget, or maybe even having ViewportGadget
-			// not derived from Gadget at all. this seems the lesser of two evils.
-			const_cast<DragDropEvent &>( event ).sourceGadget = this;
-
-			// we only actually update the camera if it's editable, but we still go through
-			// the usual dragEnter/dragMove/dragEnd process so that we can swallow the events.
-			// it would be confusing for users if they tried to edit a non-editable camera and
-			// their gestures fell through and affected the viewport contents.
-			if( getCameraEditable() )
-			{
-				m_cameraController->motionStart( motionType, V2i( (int)event.line.p1.x, (int)event.line.p1.y ) );
-			}
-
-			// we have to return something to start the drag, but we return something that
-			// noone else will accept to make sure we keep the drag to ourself.
-			return IECore::NullObject::defaultNullObject();
-		}
-		else
-		{
-			return nullptr;
-		}
+		// we have to return something to start the drag, but we return something that
+		// noone else will accept to make sure we keep the drag to ourself.
+		return IECore::NullObject::defaultNullObject();
+	}
+	else
+	{
+		return nullptr;
 	}
 
 	return nullptr;
@@ -1567,6 +1618,9 @@ void ViewportGadget::SelectionScope::begin( const ViewportGadget *viewportGadget
 
 void ViewportGadget::SelectionScope::begin( const ViewportGadget *viewportGadget, const Imath::Box2f &rasterRegion, const Imath::M44f &transform, IECoreGL::Selector::Mode mode )
 {
+	glPushAttrib( GL_ALL_ATTRIB_BITS );
+	glPushClientAttrib( GL_CLIENT_ALL_ATTRIB_BITS );
+
 	V2f viewport = viewportGadget->getViewport();
 	Box2f ndcRegion( rasterRegion.min / viewport, rasterRegion.max / viewport );
 
@@ -1595,6 +1649,9 @@ void ViewportGadget::SelectionScope::end()
 	glPopMatrix();
 	m_selector = SelectorPtr();
 
+	glPopClientAttrib();
+	glPopAttrib();
+
 	if( m_depthSort )
 	{
 		std::sort( m_selection.begin(), m_selection.end() );
@@ -1603,7 +1660,6 @@ void ViewportGadget::SelectionScope::end()
 	{
 		std::reverse( m_selection.begin(), m_selection.end() );
 	}
-
 }
 
 ViewportGadget::RasterScope::RasterScope( const ViewportGadget *viewportGadget )

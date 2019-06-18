@@ -78,9 +78,9 @@ class PythonCommandTest( GafferTest.TestCase ) :
 	def testVariables( self ) :
 
 		n = GafferDispatch.PythonCommand()
-		n["variables"].addMember( "testInt", 1 )
-		n["variables"].addMember( "testFloat", 2.5 )
-		n["variables"].addMember( "testColor", imath.Color3f( 1, 2, 3 ) )
+		n["variables"].addChild( Gaffer.NameValuePlug( "testInt", 1 ) )
+		n["variables"].addChild( Gaffer.NameValuePlug( "testFloat", 2.5 ) )
+		n["variables"].addChild( Gaffer.NameValuePlug( "testColor", imath.Color3f( 1, 2, 3 ) ) )
 		n["command"].setValue( inspect.cleandoc(
 			"""
 			self.testInt = variables["testInt"]
@@ -259,7 +259,7 @@ class PythonCommandTest( GafferTest.TestCase ) :
 		# because that would mean that PythonCommand.hash() was no longer accurate.
 
 		n = GafferDispatch.PythonCommand()
-		n["variables"].addMember( "testInt", 1 )
+		n["variables"].addChild( Gaffer.NameValuePlug( "testInt", 1 ) )
 		n["command"].setValue( inspect.cleandoc(
 			"""
 			context.setFrame( context.getFrame() + 1 )
@@ -291,7 +291,7 @@ class PythonCommandTest( GafferTest.TestCase ) :
 
 		s = Gaffer.ScriptNode()
 		s["n"] = GafferDispatch.PythonCommand()
-		s["n"]["variables"].addMember( "frameString", "###" )
+		s["n"]["variables"].addChild( Gaffer.NameValuePlug( "frameString", "###" ) )
 		s["n"]["command"].setValue( 'self.frameString = variables["frameString"]' )
 
 		with Gaffer.Context() as c :
@@ -321,6 +321,43 @@ class PythonCommandTest( GafferTest.TestCase ) :
 		c = Gaffer.PythonCommand()
 		self.assertEqual( c["command"].getValue(), "" )
 		self.assertEqual( c["task"].hash(), IECore.MurmurHash() )
+
+	def testContextGetNone( self ) :
+
+		command = Gaffer.PythonCommand()
+		command["command"].setValue( "print context.get( 'iAmNotHere' )" )
+
+		with Gaffer.Context() as c :
+			h = command["task"].hash()
+			c["iAmNotHere"] = 10
+			self.assertNotEqual( command["task"].hash(), h )
+
+	def testAlternateMissingContextVariables( self ) :
+
+		command = Gaffer.PythonCommand()
+		command["command"].setValue( "print 'a : ', context.get( 'a' ), 'b : ', context.get( 'b' )" )
+
+		neitherHash = command["task"].hash()
+
+		with Gaffer.Context() as c :
+			c["a"] = 10
+			aHash = command["task"].hash()
+
+		with Gaffer.Context() as c :
+			c["b"] = 10
+			bHash = command["task"].hash()
+			c["a"] = 10
+			bothHash = command["task"].hash()
+
+		self.assertEqual( len( { str( x ) for x in ( neitherHash, aHash, bHash, bothHash ) } ), 4 )
+
+	def testContextModificationsDontLeak( self ) :
+
+		command = Gaffer.PythonCommand()
+		command["command"].setValue( "context.setFrame( 2 )" )
+		command["task"].execute()
+
+		self.assertEqual( Gaffer.Context.current(), Gaffer.Context() )
 
 if __name__ == "__main__":
 	unittest.main()

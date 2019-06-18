@@ -57,9 +57,9 @@ def __scriptAdded( container, script ) :
 
 	variables = script["variables"]
 	if "projectName" not in variables :
-		projectName = variables.addMember( "project:name", IECore.StringData( "default" ), "projectName" )
+		projectName = variables.addChild( Gaffer.NameValuePlug( "project:name", IECore.StringData( "default" ), "projectName", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ) )
 	if "projectRootDirectory" not in variables :
-		projectRoot = variables.addMember( "project:rootDirectory", IECore.StringData( "$HOME/gaffer/projects/${project:name}" ), "projectRootDirectory" )
+		projectRoot = variables.addChild( Gaffer.NameValuePlug( "project:rootDirectory", IECore.StringData( "$HOME/gaffer/projects/${project:name}" ), "projectRootDirectory", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ) )
 
 	Gaffer.MetadataAlgo.setReadOnly( variables["projectName"]["name"], True )
 	Gaffer.MetadataAlgo.setReadOnly( variables["projectRootDirectory"]["name"], True )
@@ -108,6 +108,19 @@ with IECore.IgnoredExceptions( ImportError ) :
 
 for dispatcher in dispatchers :
 
-	Gaffer.Metadata.registerPlugValue( dispatcher, "jobName", "userDefault", "${script:name}" )
+	Gaffer.Metadata.registerValue( dispatcher, "jobName", "userDefault", "${script:name}" )
 	directoryName = dispatcher.staticTypeName().rpartition( ":" )[2].replace( "Dispatcher", "" ).lower()
-	Gaffer.Metadata.registerPlugValue( dispatcher, "jobsDirectory", "userDefault", "${project:rootDirectory}/dispatcher/" + directoryName )
+	Gaffer.Metadata.registerValue( dispatcher, "jobsDirectory", "userDefault", "${project:rootDirectory}/dispatcher/" + directoryName )
+
+##########################################################################
+# Renderers
+##########################################################################
+
+with IECore.IgnoredExceptions( ImportError ) :
+	import GafferArnold
+	Gaffer.Metadata.registerValue( GafferArnold.ArnoldRender, "fileName", "userDefault", "${project:rootDirectory}/asses/${script:name}/${script:name}.####.ass" )
+	Gaffer.Metadata.registerValue( GafferArnold.ArnoldTextureBake, "bakeDirectory", "userDefault", "${project:rootDirectory}/bakedTextures/${script:name}/" )
+
+with IECore.IgnoredExceptions( ImportError ) :
+	import GafferAppleseed
+	Gaffer.Metadata.registerValue( GafferAppleseed.AppleseedRender, "fileName", "userDefault", "${project:rootDirectory}/appleseeds/${script:name}/${script:name}.####.appleseed" )

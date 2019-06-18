@@ -61,6 +61,11 @@ class TestCase( unittest.TestCase ) :
 		self.addCleanup( functools.partial( self.__messageHandlerCleanup, IECore.MessageHandler.getDefaultHandler() ) )
 		IECore.MessageHandler.setDefaultHandler( IECore.CapturingMessageHandler() )
 
+		# Clear the cache so that each test starts afresh. This is
+		# important for tests which use monitors to assert that specific
+		# processes are being invoked as expected.
+		Gaffer.ValuePlug.clearCache()
+
 	def tearDown( self ) :
 
 		# Clear any previous exceptions, as they can be holding
@@ -258,13 +263,19 @@ class TestCase( unittest.TestCase ) :
 		self.assertEqual( undocumentedPlugs, [] )
 
 	## We don't serialise plug values when they're at their default, so
-	# newly constructed nodes must have all their plugs be at the default value.
-	def assertNodesConstructWithDefaultValues( self, module ) :
+	# newly constructed nodes _must_ have all their plugs be at the default value.
+	# Use `nodesToIgnore` with caution : the only good reason for using it is to
+	# ignore compatibility stubs used to load old nodes and convert them into new
+	# ones.
+	def assertNodesConstructWithDefaultValues( self, module, nodesToIgnore = None ) :
 
 		for name in dir( module ) :
 
 			cls = getattr( module, name )
 			if not inspect.isclass( cls ) or not issubclass( cls, Gaffer.Node ) :
+				continue
+
+			if nodesToIgnore is not None and cls in nodesToIgnore :
 				continue
 
 			try :

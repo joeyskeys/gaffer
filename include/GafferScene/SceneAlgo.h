@@ -66,6 +66,9 @@ IE_CORE_FORWARDDECLARE( Camera )
 namespace GafferScene
 {
 
+class SceneProcessor;
+class ShaderTweaks;
+
 namespace SceneAlgo
 {
 
@@ -154,6 +157,39 @@ GAFFERSCENE_API IECore::ConstCompoundDataPtr sets( const ScenePlug *scene, const
 /// this is provided by the VisibleRenderable::bound() method, but
 /// for other object types we must return a synthetic bound.
 GAFFERSCENE_API Imath::Box3f bound( const IECore::Object *object );
+
+/// History
+/// =======
+///
+/// Methods to query the tree of upstream computations involved in computing
+/// a property of the scene.
+
+struct History : public IECore::RefCounted
+{
+	IE_CORE_DECLAREMEMBERPTR( History )
+	typedef std::vector<Ptr> Predecessors;
+
+	History() = default;
+	History( const ScenePlugPtr &scene, const Gaffer::ContextPtr &context ) : scene( scene ), context( context ) {}
+
+	ScenePlugPtr scene;
+	Gaffer::ContextPtr context;
+	Predecessors predecessors;
+};
+
+GAFFERSCENE_API History::Ptr history( const Gaffer::ValuePlug *scenePlugChild, const ScenePlug::ScenePath &path );
+
+/// Returns the upstream scene originally responsible for generating the specified location.
+GAFFERSCENE_API ScenePlug *source( const ScenePlug *scene, const ScenePlug::ScenePath &path );
+
+/// Returns the last tweaks node to edit the specified object.
+/// > Note : Currently only CameraTweaks are recognised, but as other tweaks nodes are added
+/// > we should support them here (for instance, we might introduce an ExternalProceduralTweaks
+/// > node to replace the old Parameters node).
+GAFFERSCENE_API SceneProcessor *objectTweaks( const ScenePlug *scene, const ScenePlug::ScenePath &path );
+
+/// Returns the last ShaderTweaks node to edit the specified attribute.
+GAFFERSCENE_API ShaderTweaks *shaderTweaks( const ScenePlug *scene, const ScenePlug::ScenePath &path, const IECore::InternedString &attributeName );
 
 } // namespace SceneAlgo
 

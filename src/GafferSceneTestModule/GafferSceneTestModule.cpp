@@ -37,6 +37,7 @@
 
 #include "boost/python.hpp"
 
+#include "GafferSceneTest/ContextSanitiser.h"
 #include "GafferSceneTest/CompoundObjectSource.h"
 #include "GafferSceneTest/ScenePlugTest.h"
 #include "GafferSceneTest/TestLight.h"
@@ -58,6 +59,10 @@ static void traverseSceneWrapper( const GafferScene::ScenePlug *scenePlug )
 
 BOOST_PYTHON_MODULE( _GafferSceneTest )
 {
+
+	IECorePython::RefCountedClass<ContextSanitiser, Gaffer::Monitor>( "ContextSanitiser" )
+		.def( init<>() )
+	;
 
 	GafferBindings::DependencyNodeClass<CompoundObjectSource>();
 	GafferBindings::NodeClass<TestShader>();

@@ -440,13 +440,12 @@ class TextDiff( SideBySideDiff ) :
 
 		SideBySideDiff.__init__( self, **kw )
 
-		self.__connections = []
 		for i in range( 0, 2 ) :
 			label = GafferUI.Label()
 			label._qtWidget().setSizePolicy( QtWidgets.QSizePolicy( QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed ) )
-			self.__connections.append( label.buttonPressSignal().connect( Gaffer.WeakMethod( self.__buttonPress ) ) )
-			self.__connections.append( label.dragBeginSignal().connect( Gaffer.WeakMethod( self.__dragBegin ) ) )
-			self.__connections.append( label.dragEndSignal().connect( Gaffer.WeakMethod( self.__dragEnd ) )	)
+			label.buttonPressSignal().connect( Gaffer.WeakMethod( self.__buttonPress ), scoped = False )
+			label.dragBeginSignal().connect( Gaffer.WeakMethod( self.__dragBegin ), scoped = False )
+			label.dragEndSignal().connect( Gaffer.WeakMethod( self.__dragEnd ), scoped = False )
 			self.setValueWidget( i, label )
 
 		self.__highlightDiffs = highlightDiffs
@@ -457,33 +456,31 @@ class TextDiff( SideBySideDiff ) :
 
 		self.__values = values
 
-		formattedValues = self.__formatValues( values )
+		formattedValues = self._formatValues( values )
 		for i, value in enumerate( formattedValues ) :
 			self.getValueWidget( i ).setText( self.__htmlHeader + value + self.__htmlFooter )
 
-	def __formatValues( self, values ) :
+	def _formatValues( self, values ) :
 
 		if len( values ) == 0 :
 			return []
 		elif len( values ) == 2 and type( values[0] ) != type( values[1] ) :
 			# different types - format each separately
-			return self.__formatValues( [ values[0] ] ) + self.__formatValues( [ values[1] ] )
+			return self._formatValues( [ values[0] ] ) + self._formatValues( [ values[1] ] )
 		elif isinstance( values[0], IECore.Data ) and hasattr( values[0], "value" ) :
-			return self.__formatValues( [ v.value for v in values ] )
+			return self._formatValues( [ v.value for v in values ] )
 		elif isinstance( values[0], ( imath.V3f, imath.V3i, imath.V2f, imath.V2i, imath.Color4f ) ) :
 			return self.__formatVectors( values )
 		elif isinstance( values[0], ( imath.M44f, imath.M44d ) ) :
 			return self.__formatMatrices( values )
 		elif isinstance( values[0], ( imath.Box3f, imath.Box3d, imath.Box3i, imath.Box2f, imath.Box2d, imath.Box2i ) ) :
 			return self.__formatBoxes( values )
-		elif isinstance( values[0], ( IECoreScene.Shader, IECore.ObjectVector ) ) :
+		elif isinstance( values[0], ( IECoreScene.Shader, IECoreScene.ShaderNetwork ) ) :
 			return self.__formatShaders( values )
 		elif isinstance( values[0], ( float, int ) ) :
 			return self.__formatNumbers( values )
 		elif isinstance( values[0], basestring ) :
 			return self.__formatStrings( [ str( v ) for v in values ] )
-		elif isinstance( values[0], IECoreScene.PrimitiveVariable ) :
-			return self.__formatPrimitiveVariables( values )
 		else :
 			return [ cgi.escape( str( v ) ) for v in values ]
 
@@ -557,7 +554,10 @@ class TextDiff( SideBySideDiff ) :
 		formattedValues = []
 		for value in values :
 
-			shader = value[-1] if isinstance( value, IECore.ObjectVector ) else value
+			shader = value.outputShader() if isinstance( value, IECoreScene.ShaderNetwork ) else value
+			if not shader:
+				formattedValues.append( "Missing output shader" )
+				continue
 			shaderName = shader.name
 			nodeName = shader.blindData().get( "gaffer:nodeName", None )
 
@@ -603,23 +603,6 @@ class TextDiff( SideBySideDiff ) :
 				bFormatted += '<span class="diffB">' + cgi.escape( b[b1:b2] ) + "</span>"
 
 		return [ aFormatted, bFormatted ]
-
-	def __formatPrimitiveVariables( self, values ) :
-
-		result = []
-		for value in values :
-			s = str( value.interpolation )
-			s += " " + value.data.typeName()
-			if hasattr( value.data, "getInterpretation" ) :
-				s += " (" + str( value.data.getInterpretation() ) + ")"
-
-			if value.indices :
-				numElements = len( value.data )
-				s += " ( Indexed : {0} element{1} )".format( numElements, '' if numElements == 1 else 's' )
-
-			result.append( s )
-
-		return result
 
 	def __numbersToAlignedStrings( self, values ) :
 
@@ -793,14 +776,11 @@ class DiffRow( Row ) :
 				diff.setCornerWidget( 0, GafferUI.Label( "" ) )
 				diff.setCornerWidget( 1, GafferUI.Label( "" ) )
 
-			self.__diffConnections = []
 			diffWidgets = [ diff.getValueWidget( 0 ), diff.getValueWidget( 1 ) ] if isinstance( diff, SideBySideDiff ) else [ diff ]
 			for diffWidget in diffWidgets :
-				self.__diffConnections.extend( [
-					diffWidget.enterSignal().connect( Gaffer.WeakMethod( self.__enter ) ),
-					diffWidget.leaveSignal().connect( Gaffer.WeakMethod( self.__leave ) ),
-					diffWidget.contextMenuSignal().connect( Gaffer.WeakMethod( self.__contextMenu ) ),
-				] )
+				diffWidget.enterSignal().connect( Gaffer.WeakMethod( self.__enter ), scoped = False )
+				diffWidget.leaveSignal().connect( Gaffer.WeakMethod( self.__leave ), scoped = False )
+				diffWidget.contextMenuSignal().connect( Gaffer.WeakMethod( self.__contextMenu ), scoped = False )
 
 			if inspector._useBackgroundThread() :
 				GafferUI.BusyWidget( size = 22, busy = False )
@@ -952,7 +932,7 @@ class DiffRow( Row ) :
 		for i, target in enumerate( targets ) :
 
 			attribute = self.__inspector( target )
-			targetsAreShaders.append( isinstance( attribute, IECore.ObjectVector ) and isinstance( attribute[-1], IECoreScene.Shader ) )
+			targetsAreShaders.append( isinstance( attribute, IECoreScene.ShaderNetwork ) and len( attribute ) )
 
 			if len( targets ) == 2 :
 				labelSuffix = "/For " + ( "A", "B" )[i]
@@ -1060,8 +1040,8 @@ class DiffColumn( GafferUI.Widget ) :
 					if filterable :
 						self.__filterWidget = GafferUI.TextWidget()
 						self.__filterWidget._qtWidget().setPlaceholderText( "Filter..." )
-						self.__filterTextChangedConnection = self.__filterWidget.textChangedSignal().connect(
-							Gaffer.WeakMethod( self.__filterTextChanged )
+						self.__filterWidget.textChangedSignal().connect(
+							Gaffer.WeakMethod( self.__filterTextChanged ), scoped = False
 						)
 
 			self.__rowContainer = GafferUI.ListContainer()
@@ -1245,7 +1225,7 @@ class _SectionWindow( GafferUI.Window ) :
 		# tricky because sections resize lazily when they are first shown.
 		self._qtWidget().resize( 400, 250 )
 
-		self.__nodeSetMemberRemovedConnection = editor.getNodeSet().memberRemovedSignal().connect( Gaffer.WeakMethod( self.__nodeSetMemberRemoved ) )
+		editor.getNodeSet().memberRemovedSignal().connect( Gaffer.WeakMethod( self.__nodeSetMemberRemoved ), scoped = False )
 
 	def __nodeSetMemberRemoved( self, set, node ) :
 
@@ -1300,7 +1280,6 @@ class _InheritanceSection( Section ) :
 		Section.update( self, targets )
 
 		self.__target = targets[0]
-		self.__connections = []
 
 		if self.__target.path is None :
 			return
@@ -1333,11 +1312,9 @@ class _InheritanceSection( Section ) :
 					if atEitherEnd or value is not None :
 						label = GafferUI.Label( path )
 						label.setToolTip( "Click to select \"%s\"" % path )
-						self.__connections.extend( [
-							label.enterSignal().connect( lambda gadget : gadget.setHighlighted( True ) ),
-							label.leaveSignal().connect( lambda gadget : gadget.setHighlighted( False ) ),
-							label.buttonPressSignal().connect( functools.partial( Gaffer.WeakMethod( self.__labelButtonPress ) ) ),
-						] )
+						label.enterSignal().connect( lambda gadget : gadget.setHighlighted( True ), scoped = False )
+						label.leaveSignal().connect( lambda gadget : gadget.setHighlighted( False ), scoped = False )
+						label.buttonPressSignal().connect( Gaffer.WeakMethod( self.__labelButtonPress ), scoped = False )
 					else :
 						GafferUI.Label( "..." )
 
@@ -1399,12 +1376,12 @@ class _ShaderSection( LocationSection ) :
 
 		def __call__( self, target ) :
 
-			shaders = self.__inspector( target )
-			if not shaders or not isinstance( shaders, IECore.ObjectVector ) :
+			network = self.__inspector( target )
+			if not network or not isinstance( network, IECoreScene.ShaderNetwork ) :
 				return None
 
-			shader = shaders[-1]
-			if not shader or not isinstance( shader, IECoreScene.Shader ) :
+			shader = network.outputShader()
+			if not shader :
 				return None
 
 			if self.__mode == self.Name :
@@ -1447,11 +1424,11 @@ class _ShaderSection( LocationSection ) :
 			if target.path is None :
 				return None
 
-			shaders = self.__inspector( target )
-			if not shaders :
+			network = self.__inspector( target )
+			if not network :
 				return None
 
-			return shaders[-1].parameters  # only the last one is supported
+			return network.outputShader().parameters
 
 	def __init__( self, inspector, diffCreator = TextDiff, **kw ) :
 
@@ -1491,7 +1468,6 @@ class _HistorySection( Section ) :
 		Section.update( self, targets )
 
 		self.__target = targets[0]
-		self.__connections = []
 
 		if self.__target.path is None :
 			return
@@ -1887,6 +1863,42 @@ class _VDBGridInspector( Inspector ) :
 	def children ( self, target ) :
 		return []
 
+class _PrimitiveVariableTextDiff( TextDiff ) :
+
+	def __init__( self, highlightDiffs=True, **kw ) :
+
+		TextDiff.__init__( self, highlightDiffs, **kw )
+
+	def _formatValues( self, values ) :
+
+		result = []
+		for value in values :
+			s = str( value["interpolation"] )
+			s += " " + value["data"].typeName()
+			if hasattr( value["data"], "getInterpretation" ) :
+				s += " (" + str( value["data"].getInterpretation() ) + ")"
+
+			if value["indices"] :
+				numElements = len( value["data"] )
+				s += " ( Indexed : {0} element{1} )".format( numElements, '' if numElements == 1 else 's' )
+
+			result.append( s )
+
+		return result
+
+class _SubdivisionTextDiff( TextDiff ) :
+
+	def __init__( self, highlightDiffs=True, **kw ) :
+
+		TextDiff.__init__( self, highlightDiffs, **kw )
+
+	def _formatValues( self, values ) :
+
+		if isinstance( values[0], IECore.CompoundData ) :
+			return TextDiff._formatValues( self, [ len( v["sharpnesses"] ) for v in values ] )
+
+		return TextDiff._formatValues( self, values )
+
 class __ObjectSection( LocationSection ) :
 
 	def __init__( self ) :
@@ -1907,7 +1919,14 @@ class __ObjectSection( LocationSection ) :
 
 			DiffColumn(
 				self.__PrimitiveVariablesInspector(),
+				diffCreator = _PrimitiveVariableTextDiff,
 				label = "Primitive Variables"
+			)
+
+			DiffColumn(
+				self.__SubdivisionInspector(),
+				diffCreator = _SubdivisionTextDiff,
+				label = "Subdivision"
 			)
 
 			DiffColumn(
@@ -1931,7 +1950,17 @@ class __ObjectSection( LocationSection ) :
 			target.object() if target.path is not None else IECore.NullObject.defaultNullObject()
 			for target in targets
 		]
-		typeNames = [ o.typeName().split( ":" )[-1] for o in objects ]
+
+		def friendlyTypeName( o ) :
+			annotatedTypeName = o.typeName().split( ":" )[-1]
+			if isinstance( o, IECoreScene.CurvesPrimitive ) :
+				annotatedTypeName += " - " + str( o.basis().standardBasis() )
+			elif isinstance( o, IECoreScene.MeshPrimitive ) :
+				annotatedTypeName += " - " + str( o.interpolation )
+
+			return annotatedTypeName
+
+		typeNames = [friendlyTypeName( o ) for o in objects]
 		typeNames = [ "None" if t == "NullObject" else t for t in typeNames ]
 
 		if len( typeNames ) == 1 or typeNames[0] == typeNames[1] :
@@ -1979,9 +2008,6 @@ class __ObjectSection( LocationSection ) :
 				return []
 
 			result = []
-
-			if isinstance( object, IECoreScene.MeshPrimitive ) :
-				result.append( self.__class__( property = "interpolation" ) )
 
 			for i in [
 				IECoreScene.PrimitiveVariable.Interpolation.Constant,
@@ -2091,7 +2117,15 @@ class __ObjectSection( LocationSection ) :
 			if self.__primitiveVariableName not in object :
 				return None
 
-			return object[self.__primitiveVariableName]
+			primitiveVariable = object[self.__primitiveVariableName]
+
+			return IECore.CompoundData(
+				{
+					"interpolation" : str( primitiveVariable.interpolation ),
+					"data" : primitiveVariable.data,
+					"indices" : primitiveVariable.indices
+				}
+			)
 
 		def children( self, target ) :
 
@@ -2103,6 +2137,56 @@ class __ObjectSection( LocationSection ) :
 				return []
 
 			return [ self.__class__( k ) for k in object.keys() ]
+
+
+	class __SubdivisionInspector( Inspector ) :
+
+		def __init__( self, subdivisionVariableName = None ) :
+
+			Inspector.__init__( self )
+
+			self.__subdivisionVariableName = subdivisionVariableName
+
+		def name( self ) :
+
+			return self.__subdivisionVariableName
+
+		def __call__( self, target ) :
+
+			if target.path is None :
+				return None
+
+			object = target.object()
+			if not isinstance( object, ( IECoreScene.MeshPrimitive, IECoreScene.CurvesPrimitive ) ) :
+				return None
+
+			if self.__subdivisionVariableName == "Corners" :
+				return IECore.CompoundData( { "sharpnesses" : object.cornerSharpnesses(), "ids" : object.cornerIds() } )
+
+			elif self.__subdivisionVariableName == "Creases" :
+				return IECore.CompoundData( { "sharpnesses" : object.creaseSharpnesses(), "ids" : object.creaseIds(), "lengths" : object.creaseLengths() } )
+
+			elif self.__subdivisionVariableName == "Interpolation":
+				if isinstance( object, IECoreScene.CurvesPrimitive ) :
+					return str( object.basis().standardBasis() )
+				return object.interpolation
+
+		def children( self, target ) :
+
+			if target.path is None :
+				return []
+
+			object = target.object()
+			if not isinstance( object, ( IECoreScene.MeshPrimitive, IECoreScene.CurvesPrimitive ) ) :
+				return []
+
+			result = [ self.__class__( "Interpolation" ) ]
+
+			if isinstance( object, IECoreScene.MeshPrimitive ) and hasattr( object, "creaseIds" ):
+				result.append( self.__class__( "Corners" ) )
+				result.append( self.__class__( "Creases" ) )
+
+			return result
 
 SceneInspector.registerSection( __ObjectSection, tab = "Selection" )
 
@@ -2241,7 +2325,7 @@ class _OutputRow( Row ) :
 
 				with GafferUI.ListContainer( GafferUI.ListContainer.Orientation.Horizontal ) :
 					collapseButton = GafferUI.Button( image = "collapsibleArrowRight.png", hasFrame=False )
-					collapseButton.__clickedConnection = collapseButton.clickedSignal().connect( Gaffer.WeakMethod( self.__collapseButtonClicked ) )
+					collapseButton.clickedSignal().connect( Gaffer.WeakMethod( self.__collapseButtonClicked ), scoped = False )
 					self.__label = TextDiff()
 					GafferUI.Spacer( imath.V2i( 1 ), parenting = { "expand" : True } )
 
@@ -2342,7 +2426,6 @@ class _SetDiff( Diff ) :
 
 		Diff.__init__( self, self.__row, **kw )
 
-		self.__connections = []
 		with self.__row :
 			for i, name in enumerate( [ "gafferDiffA", "gafferDiffAB", "gafferDiffB" ] ) :
 				with GafferUI.Frame( borderWidth = 5 ) as frame :
@@ -2350,14 +2433,12 @@ class _SetDiff( Diff ) :
 					frame._qtWidget().setObjectName( name )
 					frame._qtWidget().setProperty( "gafferRounded", True )
 
-					self.__connections.extend( [
-						frame.buttonPressSignal().connect( Gaffer.WeakMethod( self.__buttonPress ) ),
-						frame.buttonReleaseSignal().connect( Gaffer.WeakMethod( self.__buttonRelease ) ),
-						frame.enterSignal().connect( lambda widget : widget.setHighlighted( True ) ),
-						frame.leaveSignal().connect( lambda widget : widget.setHighlighted( False ) ),
-						frame.dragBeginSignal().connect( Gaffer.WeakMethod( self.__dragBegin ) ),
-						frame.dragEndSignal().connect( Gaffer.WeakMethod( self.__dragEnd ) ),
-					] )
+					frame.buttonPressSignal().connect( Gaffer.WeakMethod( self.__buttonPress ), scoped = False )
+					frame.buttonReleaseSignal().connect( Gaffer.WeakMethod( self.__buttonRelease ), scoped = False )
+					frame.enterSignal().connect( lambda widget : widget.setHighlighted( True ), scoped = False )
+					frame.leaveSignal().connect( lambda widget : widget.setHighlighted( False ), scoped = False )
+					frame.dragBeginSignal().connect( Gaffer.WeakMethod( self.__dragBegin ), scoped = False )
+					frame.dragEndSignal().connect( Gaffer.WeakMethod( self.__dragEnd ), scoped = False )
 
 					GafferUI.Label( "" )
 

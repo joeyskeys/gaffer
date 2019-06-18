@@ -36,6 +36,7 @@
 
 from IECoreDelightPreviewTest import *
 
+from DelightRenderTest import DelightRenderTest
 from InteractiveDelightRenderTest import InteractiveDelightRenderTest
 
 if __name__ == "__main__":

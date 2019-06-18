@@ -52,6 +52,9 @@ import ArnoldShaderBallUI
 import ArnoldAOVShaderUI
 import ArnoldAtmosphereUI
 import ArnoldBackgroundUI
+import ArnoldTextureBakeUI
+import ArnoldCameraShadersUI
+import ArnoldLightFilterUI
 import CacheMenu
 
 __import__( "IECore" ).loadConfig( "GAFFER_STARTUP_PATHS", subdirectory = "GafferArnoldUI" )

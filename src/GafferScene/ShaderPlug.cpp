@@ -39,6 +39,7 @@
 #include "GafferScene/Shader.h"
 
 #include "Gaffer/BoxIO.h"
+#include "Gaffer/Context.h"
 #include "Gaffer/Dot.h"
 #include "Gaffer/ScriptNode.h"
 #include "Gaffer/SubGraph.h"
@@ -49,6 +50,58 @@
 using namespace IECore;
 using namespace Gaffer;
 using namespace GafferScene;
+
+//////////////////////////////////////////////////////////////////////////
+// Internal utilities
+//////////////////////////////////////////////////////////////////////////
+
+namespace
+{
+
+bool isShaderOutPlug( const Plug *plug )
+{
+	auto shader = runTimeCast<const Shader>( plug->node() );
+	if( !shader )
+	{
+		return false;
+	}
+	const Plug *outPlug = shader->outPlug();
+	if( !outPlug )
+	{
+		return false;
+	}
+	return plug == shader->outPlug() || shader->outPlug()->isAncestorOf( plug );
+}
+
+bool isParameterType( const Plug *plug )
+{
+	switch( (int)plug->typeId() )
+	{
+		case PlugTypeId :      // These two could be used to represent
+		case ValuePlugTypeId : // struct parameters
+		case FloatPlugTypeId :
+		case IntPlugTypeId :
+		case StringPlugTypeId :
+		case V2fPlugTypeId :
+		case V3fPlugTypeId :
+		case V2iPlugTypeId :
+		case V3iPlugTypeId :
+		case Color3fPlugTypeId :
+		case Color4fPlugTypeId :
+		case M33fPlugTypeId :
+		case M44fPlugTypeId :
+		case BoolPlugTypeId :
+			return true;
+		default :
+			// Use typeName query to avoid hard dependency on
+			// GafferOSL. It may be that we should move ClosurePlug
+			// to GafferScene anyway.s
+			return plug->isInstanceOf( "GafferOSL::ClosurePlug" );
+	}
+	return false;
+}
+
+} // namespace
 
 //////////////////////////////////////////////////////////////////////////
 // ShaderPlug
@@ -90,10 +143,9 @@ bool ShaderPlug::acceptsInput( const Gaffer::Plug *input ) const
 	// We only want to accept connections from the output
 	// plug of a shader.
 	const Plug *sourcePlug = input->source();
-	const Node *sourceNode = sourcePlug->node();
-	if( const Shader *shader = runTimeCast<const Shader>( sourceNode ) )
+	if( isShaderOutPlug( sourcePlug ) )
 	{
-		return sourcePlug == shader->outPlug() || shader->outPlug()->isAncestorOf( sourcePlug );
+		return true;
 	}
 
 	// But we also accept intermediate connections from
@@ -102,6 +154,33 @@ bool ShaderPlug::acceptsInput( const Gaffer::Plug *input ) const
 	if( runTimeCast<const ShaderPlug>( sourcePlug ) )
 	{
 		return true;
+	}
+
+	// And we support switches by traversing across them
+	// ourselves when necessary, in `shaderOutPlug()`.
+	if( auto switchNode = runTimeCast<const Switch>( sourcePlug->node() ) )
+	{
+		if( sourcePlug == switchNode->outPlug() || sourcePlug->parent() == switchNode->inPlugs() )
+		{
+			// Reject switches which have inputs from non-shader nodes.
+			for( PlugIterator it( switchNode->inPlugs() ); !it.done(); ++it )
+			{
+				if( (*it)->getInput() && !isShaderOutPlug( (*it)->source() ) )
+				{
+					return false;
+				}
+			}
+			// For switches without any inputs, we have to assume that
+			// the user might connect a shader in the future. But there
+			// are certain plug types we know a shader can never be connected
+			// to. Reject those, otherwise stupid things happen, like the
+			// ShaderView trying to display scenes and images.
+			if( !isParameterType( sourcePlug ) )
+			{
+				return false;
+			}
+			return true;
+		}
 	}
 
 	// Really, we want to return false now, but during
@@ -117,9 +196,9 @@ bool ShaderPlug::acceptsInput( const Gaffer::Plug *input ) const
 		return false;
 	}
 
+	const Node *sourceNode = sourcePlug->node();
 	return
 		runTimeCast<const SubGraph>( sourceNode ) ||
-		runTimeCast<const Switch>( sourceNode ) ||
 		runTimeCast<const Dot>( sourceNode ) ||
 		runTimeCast<const BoxIO>( sourceNode )
 	;
@@ -127,15 +206,17 @@ bool ShaderPlug::acceptsInput( const Gaffer::Plug *input ) const
 
 IECore::MurmurHash ShaderPlug::attributesHash() const
 {
-	const Gaffer::Plug *p = shaderOutPlug();
-
 	IECore::MurmurHash h;
-	if (p)
+	if( const Gaffer::Plug *p = shaderOutPlug() )
 	{
-		const GafferScene::Shader *s = runTimeCast<const GafferScene::Shader>( p->node() );
-		if( s )
+		if( auto s = runTimeCast<const GafferScene::Shader>( p->node() ) )
 		{
-			s->attributesHash( p, h );
+			Context::EditableScope scope( Context::current() );
+			if( p != s->outPlug() )
+			{
+				scope.set( Shader::g_outputParameterContextName, p->relativeName( s->outPlug() ) );
+			}
+			h = s->outAttributesPlug()->hash();
 		}
 	}
 
@@ -144,13 +225,16 @@ IECore::MurmurHash ShaderPlug::attributesHash() const
 
 IECore::ConstCompoundObjectPtr ShaderPlug::attributes() const
 {
-	const Gaffer::Plug *p = shaderOutPlug();
-	if (p)
+	if( const Gaffer::Plug *p = shaderOutPlug() )
 	{
-		const GafferScene::Shader* s = runTimeCast<const GafferScene::Shader>(p->node());
-		if (s)
+		if( auto s = runTimeCast<const GafferScene::Shader>( p->node() ) )
 		{
-			return s->attributes( p );
+			Context::EditableScope scope( Context::current() );
+			if( p != s->outPlug() )
+			{
+				scope.set( Shader::g_outputParameterContextName, p->relativeName( s->outPlug() ) );
+			}
+			return s->outAttributesPlug()->getValue();
 		}
 	}
 	return new CompoundObject;
@@ -164,5 +248,24 @@ const Gaffer::Plug *ShaderPlug::shaderOutPlug() const
 		// No input
 		return nullptr;
 	}
+
+	if( auto switchNode = source->parent<Switch>() )
+	{
+		if( source == switchNode->outPlug() )
+		{
+			// Special case for switches with context-varying index values.
+			// Query the active input for this context, and manually traverse
+			// out the other side.
+			/// \todo Perhaps we should support ContextProcessors in the same way?
+			/// We have a similar pattern now in ShaderPlug, Shader::NetworkBuilder
+			/// and Dispatcher. Perhaps the logic should be consolidated into a
+			/// `PlugAlgo::computedSource()` utility of some sort?
+			if( const Plug *activeInPlug = switchNode->activeInPlug() )
+			{
+				source = activeInPlug->source();
+			}
+		}
+	}
+
 	return source;
 }

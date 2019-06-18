@@ -499,6 +499,13 @@ _styleSheet = string.Template(
 
 	}
 
+	/* Ensures the QSplitter border is visible if we need to highlight */
+	QSplitter#gafferCompoundEditor[gafferNumChildren="1"] {
+
+		padding: 1px;
+
+	}
+
 	QSplitter::handle:vertical {
 
 		background-color: $backgroundDark;
@@ -528,6 +535,12 @@ _styleSheet = string.Template(
 
 		color: white;
 		background-color:	$brightColor;
+
+	}
+
+	QSplitter[gafferHighlighted="true"] {
+
+		border: 1px solid $brightColor;
 
 	}
 
@@ -793,6 +806,7 @@ _styleSheet = string.Template(
 		width: 20px;
 		height: 20px;
 		background-color: transparent;
+		border-radius: 2px;
 	}
 
 	QCheckBox::indicator:unchecked {
@@ -820,6 +834,14 @@ _styleSheet = string.Template(
 
 	QCheckBox::indicator:unchecked:disabled {
 		image: url($GAFFER_ROOT/graphics/checkBoxUncheckedDisabled.png);
+	}
+
+	QCheckBox[gafferAnimated="true"]::indicator {
+		background-color: $animatedColor;
+	}
+
+	QCheckBox[gafferError="true"]::indicator {
+		background-color: $errorColor;
 	}
 
 	/* boolwidget drawn as switch */

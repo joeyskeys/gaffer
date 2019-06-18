@@ -73,8 +73,8 @@ class PythonEditor( GafferUI.Editor ) :
 		self.__splittable.append( self.__outputWidget )
 		self.__splittable.append( self.__inputWidget )
 
-		self.__inputWidgetActivatedConnection = self.__inputWidget.activatedSignal().connect( Gaffer.WeakMethod( self.__activated ) )
-		self.__inputWidgetDropTextConnection = self.__inputWidget.dropTextSignal().connect( Gaffer.WeakMethod( self.__dropText ) )
+		self.__inputWidget.activatedSignal().connect( Gaffer.WeakMethod( self.__activated ), scoped = False )
+		self.__inputWidget.dropTextSignal().connect( Gaffer.WeakMethod( self.__dropText ), scoped = False )
 
 		self.__executionDict = {
 			"imath" : imath,
@@ -151,6 +151,8 @@ class PythonEditor( GafferUI.Editor ) :
 				return self.__dropText( widget, dragData[0] )
 			else :
 				return "[ " + ", ".join( [ self.__dropText( widget, d ) for d in dragData ] ) + " ]"
+		elif isinstance( dragData, IECore.CompoundData ) :
+			return repr( dragData )
 		elif isinstance( dragData, IECore.Data ) and hasattr( dragData, "value" ) :
 			return repr( dragData.value )
 

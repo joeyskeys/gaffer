@@ -69,8 +69,6 @@ ArrayPlug::ArrayPlug( const std::string &name, Direction direction, PlugPtr elem
 			MetadataAlgo::copyColors( element.get() , p.get() , /* overwrite = */ false  );
 		}
 	}
-
-	parentChangedSignal().connect( boost::bind( &ArrayPlug::parentChanged, this ) );
 }
 
 ArrayPlug::~ArrayPlug()
@@ -84,20 +82,16 @@ bool ArrayPlug::acceptsChild( const GraphComponent *potentialChild ) const
 		return false;
 	}
 
-	if( children().size() == 0 || potentialChild->typeId() == children()[0]->typeId() )
-	{
-		return true;
-	}
+	return children().size() == 0 || potentialChild->typeId() == children()[0]->typeId();
+}
 
-	// Ideally we'd just return false here right away, but we need this
-	// hack to provide backwards compatibility with old TaskNodes,
-	// which used to use generic Plugs as children and now use TaskPlugs.
-	if( children()[0]->isInstanceOf( "GafferDispatch::TaskNode::TaskPlug" ) && potentialChild->typeId() == (IECore::TypeId)PlugTypeId )
+bool ArrayPlug::acceptsInput( const Plug *input ) const
+{
+	if( !Plug::acceptsInput( input ) )
 	{
-		return true;
+		return false;
 	}
-
-	return false;
+	return !input || IECore::runTimeCast<const ArrayPlug>( input );
 }
 
 void ArrayPlug::setInput( PlugPtr input )
@@ -129,8 +123,10 @@ size_t ArrayPlug::maxSize() const
 	return m_maxSize;
 }
 
-void ArrayPlug::parentChanged()
+void ArrayPlug::parentChanged( GraphComponent *oldParent )
 {
+	Plug::parentChanged( oldParent );
+
 	if( !node() )
 	{
 		return;
